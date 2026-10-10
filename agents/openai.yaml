@@ -1,0 +1,5 @@
+interface:
+  display_name: "MKT Max 1"
+  short_description: "以两阶段研究与内容生产，完成活动方案、局部工作件及接续审查"
+policy:
+  allow_implicit_invocation: true

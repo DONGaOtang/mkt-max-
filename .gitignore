@@ -1,0 +1,13 @@
+# User configuration and local runtime data
+/config.json
+/runtime-config.local.json
+/projects/
+/workspace/
+/.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
