@@ -24,6 +24,8 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 FINGERPRINT_VERSION = 2
+WORKFLOW_VERSION = 2
+HUMAN_GATES = {"brief", "research", "direction", "writing", "chapter_review", "delivery"}
 APPLICABILITY = {"now", "later", "not_needed", "unknown"}
 CONTENT_STATUS = {"outline", "draft", "reviewable", "needs_review", "blocked", "archived"}
 COLLECTIONS = {
@@ -397,7 +399,9 @@ class HubRuntime:
     def _state_template(self, project_id: str, name: str, revision: str, init_hash: str) -> dict:
         state = {"schema_version": SCHEMA_VERSION, "project_id": project_id, "name": name,
                  "revision": revision, "generation": 1, "phase": "research", "brief": None,
-                 "workflow_mode": "collaborative", "contract": None, "handoff": None,
+                 "workflow_mode": "collaborative", "workflow_version": WORKFLOW_VERSION,
+                 "discussion_round": "round-" + uuid.uuid4().hex[:12],
+                 "contract": None, "handoff": None,
                  "dependencies": {}, "last_change": None,
                  "initialized_at": _now(), "initialization_hash": init_hash,
                  "content_units": {}, "sessions": {}}
@@ -504,6 +508,10 @@ class HubRuntime:
             raise HubError("Project/schema/revision identity mismatch", 4, project_id=project_id, current_revision=revision)
         if state.get("phase") not in ("research", "production"):
             raise HubError("Invalid project phase")
+        if "workflow_version" in state:
+            if type(state["workflow_version"]) is not int or state["workflow_version"] != WORKFLOW_VERSION or state.get("workflow_mode") != "collaborative":
+                raise HubError("Unsupported human workflow version", 4)
+            _id(state.get("discussion_round"), "discussion round")
         # Early development schema-1 snapshots had these optional empty object
         # collections. Defaults are in memory only; immutable bytes stay intact.
         state.setdefault("content_units", {})
@@ -628,7 +636,7 @@ class HubRuntime:
         return result
 
     def _validate_payload(self, kind: str, payload: Any) -> dict:
-        if not isinstance(kind, str) or kind not in {"source", "contract", "handoff", "module", "change", "review"}:
+        if not isinstance(kind, str) or kind not in {"source", "contract", "handoff", "module", "change", "review", "reopen"}:
             raise HubError(f"Unknown submit kind: {kind}")
         if not isinstance(payload, dict):
             raise HubError("Payload must be a JSON object")
@@ -638,6 +646,7 @@ class HubRuntime:
             raise HubError(f"Payload must contain finite JSON values: {exc}") from exc
         _require(data, ["file"])
         required = {
+            "reopen": ["reason", "source_ids", "retained_refs"],
             "source": ["source_id", "title", "producer", "locator", "published_at", "occurred_at", "accessed_at", "version", "access_status", "read_scope", "supports", "limitations"],
             "contract": ["requirements", "author_role", "recipient_role", "document_use", "modules"],
             "handoff": ["policy", "decision_ids", "source_ids", "inventory_source_ids", "sufficiency", "unresolved"],
@@ -651,7 +660,7 @@ class HubRuntime:
                 _list(data[field], field)
                 for ident in data[field]:
                     _id(ident, field)
-        for field in ("depends_on", "impact", "targets", "remove_dependencies"):
+        for field in ("depends_on", "impact", "targets", "remove_dependencies", "retained_refs"):
             if field in data:
                 data[field] = _refs(data[field], field)
         if "allowed_roles" in data:
@@ -797,6 +806,7 @@ class HubRuntime:
                          artifact_paths=[str(self._artifact_path(project, revision, a)) for a in state["artifacts"].values()
                                          if a.get("created_revision") == revision],
                          context_path=str(project / "项目中枢.md"), warnings=warnings,
+                         discussion_round=state.get("discussion_round"), workflow_version=state.get("workflow_version"),
                          next_actions=["Run repair.py to rebuild derived views"] if warnings else
                          ([self._next_discussion(state)] if state.get("workflow_mode") == "collaborative" else ["Resume current task and read required originals"]),
                          affected=operation.get("affected", []), project_path=str(project))
@@ -942,7 +952,22 @@ class HubRuntime:
             graph["contract:current"] += [f"module:{ident}" for ident in state["contract"]["module_order"]]
         if state.get("handoff"):
             graph["handoff:current"] += [f"source:{ident}" for ident in state["handoff"]["inventory_source_ids"]]
-        denied = set()
+        # A full writing commission names every chapter in its scope. Scope is
+        # a disclosure relationship, not a content dependency (which would
+        # create module/commission cycles). Mixed-scope originals stay private.
+        invalid_scope = set()
+        for ident, decision in state["decisions"].items():
+            value = decision.get("value")
+            if isinstance(value, dict) and value.get("gate") == "writing":
+                try:
+                    scopes = ["module:" + _id(module_id) for module_id in _list(value.get("modules"), "writing modules")]
+                except HubError:
+                    invalid_scope.add("decision:" + ident)
+                else:
+                    if not scopes:
+                        invalid_scope.add("decision:" + ident)
+                    graph["decision:" + ident] += scopes
+        denied = invalid_scope
         for ref, obj in objects.items():
             own = obj.get("allowed_roles")
             if own is None and (ref.startswith("source:") or ref == "artifact:brief"):
@@ -1090,6 +1115,55 @@ class HubRuntime:
         self._write_json(stage / "research" / "sources" / f"{ident}.json", state["sources"][ident])
         return {f"source:{ident}", f"artifact:{artifact_id}"}
 
+    def reopen(self, project: str | Path, base: str, operation_id: str, file: str | Path,
+               source_ids: list[str], reason: str, retained_refs: list[str] | None = None) -> dict:
+        return self.submit(project, base, operation_id, "reopen", {
+            "file": str(file), "source_ids": source_ids, "reason": reason,
+            "retained_refs": [] if retained_refs is None else retained_refs})
+
+    def _apply_reopen(self, project: Path, stage: Path, state: dict, payload: dict,
+                      inputs: list[dict], operation_id: str) -> set[str]:
+        _text(payload["reason"], "reopen reason")
+        if not payload["source_ids"]:
+            raise HubError("重开须引用主创本次实际原话，先保存重开委托来源。", 7)
+        for source_id in payload["source_ids"]:
+            self._object(state, "source:" + source_id)
+        for ref in payload["retained_refs"]:
+            self._object(state, ref)
+        previous_round = state.get("discussion_round")
+        state.update(workflow_mode="collaborative", workflow_version=WORKFLOW_VERSION,
+                     discussion_round="round-" + uuid.uuid4().hex[:12], phase="research",
+                     round_started_revision=state["revision"], previous_discussion_round=previous_round,
+                     retained_refs=list(payload["retained_refs"]))
+        if state.get("contract"):
+            state["contract"]["stale"] = True
+            state["contract"]["stale_reasons"] = ["本轮重开后须核对委托与继承范围"]
+        if state.get("handoff"):
+            state["handoff"]["stale"] = True
+            state["handoff"]["stale_reasons"] = ["旧交接保留为历史，本轮须重新委托接笔"]
+        old_gates = set()
+        for decision_id, decision in state["decisions"].items():
+            value = decision.get("value")
+            if isinstance(value, dict) and value.get("gate") in HUMAN_GATES:
+                old_gates.add(decision_id)
+                decision["stale"] = True
+                decision["stale_reasons"] = ["旧轮人工答复保留为历史，本轮须核对其适用范围"]
+        for ident, module in state["modules"].items():
+            for declaration in (module, module.get("contract_spec", {})):
+                declaration["decision_ids"] = [item for item in declaration.get("decision_ids", []) if item not in old_gates]
+                declaration["depends_on"] = [ref for ref in declaration.get("depends_on", [])
+                                             if not (ref.startswith("decision:") and ref.split(":", 1)[1] in old_gates)]
+            if "module:" + ident not in payload["retained_refs"]:
+                module["stale"] = True
+                module["stale_reasons"] = ["本轮重开后须核对原稿与继承范围"]
+                if module.get("body_artifact_id"):
+                    module["content_status"] = "needs_review"
+        artifact_id = _generated("reopen-", operation_id)
+        self._artifact(stage, state, artifact_id, "discussion_reopen", "", f"changes/reopen-{operation_id}.md",
+                       inputs[0], allowed_roles=["master"],
+                       depends_on=["source:" + source_id for source_id in payload["source_ids"]])
+        return {"artifact:" + artifact_id}
+
     def _apply_contract(self, project: Path, stage: Path, state: dict, payload: dict, inputs: list[dict], operation_id: str) -> set[str]:
         for field in ("author_role", "recipient_role", "document_use"):
             _text(payload[field], field)
@@ -1167,13 +1241,20 @@ class HubRuntime:
         return result
 
     @staticmethod
+    def _require_human_workflow(state: dict) -> None:
+        if state.get("workflow_mode") != "collaborative" or state.get("workflow_version") != WORKFLOW_VERSION:
+            raise HubError("旧项目须先用 reopen 建立本轮协作委托；旧生产状态不能放行新的章节或客户交付。", 7)
+
+    @staticmethod
     def _confirmed_gate(state: dict, ids: list[str], gate: str, field: str, expected: str) -> str:
         matches = []
         for ident in ids:
             decision = state["decisions"].get(ident) or {}
             value = decision.get("value")
             if (decision.get("status") == "confirmed" and not decision.get("stale") and isinstance(value, dict)
-                    and value.get("gate") == gate and value.get(field) == expected):
+                    and value.get("gate") == gate and value.get(field) == expected
+                    and (state.get("workflow_version") != WORKFLOW_VERSION
+                         or value.get("round_id") == state.get("discussion_round"))):
                 matches.append(ident)
         if len(matches) != 1:
             raise HubError(f"请引用与当前内容一致的一条有效人工决定（gate={gate}）。", 7)
@@ -1187,35 +1268,159 @@ class HubRuntime:
         return self._confirmed_gate(state, ids, "brief", "scope", scope)
 
     def _direction_gates(self, state: dict, handoff: dict | None) -> tuple[str, str]:
+        self._require_human_workflow(state)
         if not handoff or handoff.get("stale") or handoff["sufficiency"] == "blocked":
             raise HubError("需要当前有效且具备生产条件的方针交接；请先审阅研究材料和方向选择。", 7)
         brief = self._brief_gate(state, handoff["decision_ids"])
         direction = self._confirmed_gate(state, handoff["decision_ids"], "direction", "policy", handoff["policy"])
         if brief not in state["decisions"][direction]["decision_ids"]:
             raise HubError("方针决定须引用同一份已确认的委托。", 7)
+        self._research_gate(state, state["decisions"][direction]["decision_ids"])
         return brief, direction
 
+    def _research_gate(self, state: dict, ids: list[str]) -> str:
+        matches = []
+        for ident in ids:
+            decision = state["decisions"].get(ident) or {}
+            value = decision.get("value")
+            if (isinstance(value, dict) and value.get("gate") == "research"
+                    and decision.get("status") == "confirmed" and not decision.get("stale")
+                    and value.get("round_id") == state.get("discussion_round")):
+                matches.append(ident)
+        if len(matches) != 1:
+            raise HubError("先向主创回交研究发现，并记录本轮采用、继续查或调整重点的明确答复。", 7)
+        value = state["decisions"][matches[0]]["value"]
+        return self._confirmed_gate(state, ids, "research", "selection", value.get("selection"))
+
+    def _writing_gate(self, state: dict, ids: list[str], module_id: str | None = None) -> str:
+        self._require_human_workflow(state)
+        brief, direction = self._direction_gates(state, state.get("handoff"))
+        matches = []
+        for ident in ids:
+            decision = state["decisions"].get(ident) or {}
+            value = decision.get("value")
+            if (decision.get("status") != "confirmed" or decision.get("stale")
+                    or not isinstance(value, dict) or value.get("gate") != "writing"
+                    or value.get("round_id") != state["discussion_round"]):
+                continue
+            if module_id is not None and module_id not in value.get("modules", []):
+                continue
+            if any(item not in state["modules"] for item in value.get("modules", [])):
+                continue
+            if {brief, direction}.issubset(decision.get("decision_ids", [])):
+                matches.append(ident)
+        if not matches or (module_id is not None and len(matches) != 1):
+            raise HubError("选中创意后仍须明确接笔委托，请引用本轮有效的章节范围、读者用途和审阅节奏。", 7)
+        return matches[0]
+
+    def _chapter_permission(self, state: dict, ids: list[str], module_id: str) -> list[str]:
+        writing = self._writing_gate(state, ids, module_id)
+        value = state["decisions"][writing]["value"]
+        permission = [writing]
+        if value["mode"] == "chapter":
+            position = value["modules"].index(module_id)
+            for previous_id in value["modules"][:position]:
+                previous = state["modules"][previous_id]
+                body_id = previous.get("body_artifact_id")
+                body = state["artifacts"].get(body_id, {})
+                if not body_id or previous.get("stale"):
+                    raise HubError(f"先交 {previous_id} 的当前正文给人审阅，再继续下一章。", 7)
+                reviews = []
+                for ident, decision in state["decisions"].items():
+                    reviewed = decision.get("value")
+                    if (decision.get("status") == "confirmed" and not decision.get("stale")
+                            and isinstance(reviewed, dict) and reviewed.get("gate") == "chapter_review"
+                            and reviewed.get("round_id") == state["discussion_round"]
+                            and reviewed.get("module_id") == previous_id
+                            and reviewed.get("body_sha256") == body.get("sha256")
+                            and writing in decision.get("decision_ids", [])):
+                        reviews.append((decision["updated_revision"], ident, reviewed["outcome"]))
+                latest = max(reviews) if reviews else None
+                if latest is None or latest[2] != "continue":
+                    raise HubError(f"{previous_id} 已交稿，须取得对应版本的章节反馈后再写下一章。", 7)
+                permission.append(latest[1])
+        return permission
+
+    def _verify_chapter_review(self, state: dict, payload: dict, chain: list[dict]) -> str:
+        value = payload["new_value"]
+        _require(value, ["module_id", "review_revision", "body_sha256", "outcome"])
+        module_id = _id(value["module_id"], "reviewed module")
+        _enum(value["outcome"], {"continue", "revise"}, "chapter review outcome")
+        writing = self._writing_gate(state, payload["decision_ids"], module_id)
+        ancestor = next((item for item in chain if item["revision"] == value["review_revision"]), None)
+        if ancestor is None or ancestor["state"].get("discussion_round") != state["discussion_round"]:
+            raise HubError("章节反馈须指向本轮实际展示的已提交版本。", 7)
+        shown = ancestor["state"]["modules"].get(module_id, {})
+        shown_body = ancestor["state"]["artifacts"].get(shown.get("body_artifact_id"), {})
+        current = state["modules"].get(module_id, {})
+        current_body = state["artifacts"].get(current.get("body_artifact_id"), {})
+        if (not shown_body or shown_body.get("sha256") != value["body_sha256"]
+                or current_body.get("sha256") != value["body_sha256"] or current.get("stale")):
+            raise HubError("章审须绑定所读正文的 SHA256，并核对当前正文和条件；请先交修订稿。", 7)
+        payload["depends_on"] = list(dict.fromkeys(payload.get("depends_on", []) + ["module:" + module_id]))
+        return writing
+
     def _refresh_phase(self, state: dict) -> None:
-        if state.get("workflow_mode") == "collaborative":
+        if state.get("workflow_version") == WORKFLOW_VERSION:
             try:
-                self._direction_gates(state, state.get("handoff"))
+                self._writing_gate(state, list(state["decisions"]))
             except HubError:
                 state["phase"] = "research"
             else:
                 state["phase"] = "production"
 
     def _next_discussion(self, state: dict) -> str:
+        if state.get("workflow_version") != WORKFLOW_VERSION:
+            return "先回交旧案的资料与决定继承范围，用 reopen 建立本轮协作，再确认本轮委托。"
         if state["phase"] == "production":
-            for decision in state["decisions"].values():
-                value = decision.get("value")
-                if isinstance(value, dict) and value.get("gate") == "delivery" and decision["status"] == "confirmed" and not decision.get("stale"):
-                    return "回读交付采纳记录的范围和版本；继续处理未采纳的修改意见或约定交接。"
-            return "按已授权范围逐章写本轮正文，列明仍待决定的承诺，交指定读者审阅。"
+            commissions = sorted(state["decisions"].items(), key=lambda item: item[1].get("updated_revision", ""), reverse=True)
+            for writing_id, commission in commissions:
+                value = commission.get("value")
+                if not isinstance(value, dict) or value.get("gate") != "writing":
+                    continue
+                try:
+                    self._writing_gate(state, [writing_id])
+                except HubError:
+                    continue
+                for module_id in value["modules"]:
+                    module = state["modules"][module_id]
+                    body = state["artifacts"].get(module.get("body_artifact_id"), {})
+                    if not body or module.get("stale"):
+                        return f"按本轮委托写或修订 {module_id} 的实际正文；交稿后按约定逐章或整组回交。"
+                    if value["mode"] == "chapter":
+                        feedback = [record for record in state["decisions"].values()
+                                    if record.get("status") == "confirmed" and not record.get("stale")
+                                    and isinstance(record.get("value"), dict) and record["value"].get("gate") == "chapter_review"
+                                    and record["value"].get("round_id") == state["discussion_round"]
+                                    and record["value"].get("module_id") == module_id
+                                    and record["value"].get("body_sha256") == body.get("sha256")
+                                    and writing_id in record.get("decision_ids", [])]
+                        latest = max(feedback, key=lambda item: item["updated_revision"]) if feedback else None
+                        if latest is None:
+                            return f"交出 {module_id} 的当前实际正文，等待主创反馈后再推进下一章；可核已委托的共用材料。"
+                        if latest["value"]["outcome"] == "revise":
+                            return f"按已收到的具体反馈修改 {module_id}，再回交本章；下一章仍等待本章续写决定。"
+                return "本次委托的章节已写齐，回读实际审阅和采纳记录；尚未审阅的正文回交接收者，已采纳部分按约定接续。"
+            return "按本轮接笔范围写当前章并交实际正文；逐章模式等待该章反馈，明确批量授权才连写该组。"
         try:
             self._brief_gate(state, list(state["decisions"]))
         except HubError:
             return "先给委托人看委托与分流简报，核对眼前的决定、目标、本轮用途及范围，沿用已明确的事项。"
-        return "按本轮待决事项给有权者看相应材料，如体验原型、投入比较、公开说法或业务接收实例。已有选择只在原范围内沿用，约定的开写条件满足后交接。"
+        try:
+            self._research_gate(state, list(state["decisions"]))
+        except HubError:
+            return "回交研究发现、原件细节和反例，问主创采用、继续查或改变哪一重点，等本轮答复。"
+        directions = [decision for decision in state["decisions"].values()
+                      if decision.get("status") == "confirmed" and not decision.get("stale")
+                      and isinstance(decision.get("value"), dict) and decision["value"].get("gate") == "direction"
+                      and decision["value"].get("round_id") == state["discussion_round"]]
+        if not directions:
+            return "把创意原型、差异和代价交主创取舍；保存选中、保留和暂缓的原话，尚未选择时继续共同研究。"
+        try:
+            self._direction_gates(state, state.get("handoff"))
+        except HubError:
+            return "按已选方向整理原稿、依据、编辑范围与章节安排，保存本轮交接；已有明确取舍直接沿用。"
+        return "回交主创底稿和章节安排，请明确接笔章节、读者用途与逐章或批量审阅范围，再进入第二阶段。"
 
     def _apply_handoff(self, project: Path, stage: Path, state: dict, payload: dict, inputs: list[dict], operation_id: str) -> set[str]:
         if not state.get("contract"):
@@ -1227,15 +1432,13 @@ class HubRuntime:
             raise HubError("Conditional/blocked handoff must declare unresolved impact", 7)
         if set(payload["inventory_source_ids"]) != set(state["sources"]):
             raise HubError("Handoff inventory must identify all current sources; this does not certify reading", 7)
-        if state.get("workflow_mode") == "collaborative":
-            self._direction_gates(state, payload)
+        self._direction_gates(state, payload)
         prior_handoff = state.get("handoff")
         self._artifact(stage, state, "handoff-current", "handoff", "handoff:current", "research/handoff.md", inputs[0])
         state["handoff"] = {k: v for k, v in payload.items() if k not in {"file", "project_id"}}
         if prior_handoff and "allowed_roles" in prior_handoff and "allowed_roles" not in state["handoff"]:
             state["handoff"]["allowed_roles"] = prior_handoff["allowed_roles"]
         state["handoff"].update({"artifact_id": "handoff-current", "stale": False, "stale_reasons": [], "updated_revision": state["revision"]})
-        state["phase"] = "production"
         return {"handoff:current", "artifact:handoff-current"}
 
     def _apply_module(self, project: Path, stage: Path, state: dict, payload: dict, inputs: list[dict], operation_id: str) -> set[str]:
@@ -1247,11 +1450,14 @@ class HubRuntime:
             raise HubError("Module applicability does not authorize body production", 7)
         if not state.get("handoff"):
             raise HubError("Module production needs actual phase-one handoff", 7)
-        if state.get("workflow_mode") == "collaborative":
-            gates = self._direction_gates(state, state["handoff"])
-            if any("decision:" + ident in payload.get("remove_dependencies", []) for ident in gates):
-                raise HubError("正式正文必须保留本次已确认的委托与方向决定。", 7)
-            module["decision_ids"] = list(dict.fromkeys(module["decision_ids"] + list(gates)))
+        gates = list(self._direction_gates(state, state["handoff"]))
+        gates += self._chapter_permission(state, payload["decision_ids"], ident)
+        if any("decision:" + gate in payload.get("remove_dependencies", []) for gate in gates):
+            raise HubError("正式正文必须保留本轮人工决定和接笔委托。", 7)
+        ordinary_decisions = [item for item in module["decision_ids"]
+                              if not (isinstance(state["decisions"].get(item, {}).get("value"), dict)
+                                      and state["decisions"][item]["value"].get("gate") in HUMAN_GATES)]
+        module["decision_ids"] = list(dict.fromkeys(ordinary_decisions + gates))
         _enum(payload["content_status"], CONTENT_STATUS, "body maturity")
         if payload["content_status"] in {"outline", "archived"}:
             raise HubError("Body submission requires draft/reviewable/needs_review/blocked maturity")
@@ -1443,6 +1649,7 @@ class HubRuntime:
 
     def _apply_change(self, project: Path, stage: Path, state: dict, payload: dict, inputs: list[dict], operation_id: str,
                       chain: list[dict]) -> set[str]:
+        replaced_reviews = set()
         kind = payload["entity"]
         _enum(kind, {"fact", "decision", "resource", "cost", "question", "event", "unit", "session"}, "change entity")
         ident = _id(payload["id"])
@@ -1469,12 +1676,15 @@ class HubRuntime:
             for field in ("actor", "at", "evidence"):
                 _text(confirmation[field], "confirmation." + field)
             value = payload["new_value"]
-            if state.get("workflow_mode") == "collaborative" and isinstance(value, dict):
+            if isinstance(value, dict) and value.get("gate") in HUMAN_GATES:
                 gate = value.get("gate")
-                if gate in ("brief", "direction", "delivery") and not payload["source_ids"]:
+                self._require_human_workflow(state)
+                if value.get("round_id") != state["discussion_round"]:
+                    raise HubError("人工答复须绑定当前 discussion_round；旧轮批准不能放行本轮工作。", 7)
+                if not payload["source_ids"]:
                     raise HubError("已确认的审核决定须用 source_ids 引用本次实际回复或委托原话。", 7)
-                if gate in ("brief", "direction"):
-                    _text(value.get("scope" if gate == "brief" else "policy"), gate)
+                if gate in ("brief", "research", "direction"):
+                    _text(value.get({"brief": "scope", "research": "selection", "direction": "policy"}[gate]), gate)
                     if gate == "brief":
                         contract = state.get("contract") or {}
                         if contract.get("stale") or contract.get("brief_scope") != value["scope"]:
@@ -1482,10 +1692,42 @@ class HubRuntime:
                     for other_id, other in state["decisions"].items():
                         other_value = other.get("value")
                         if (other_id != ident and other["status"] == "confirmed" and not other.get("stale")
-                                and isinstance(other_value, dict) and other_value.get("gate") == gate):
+                                and isinstance(other_value, dict) and other_value.get("gate") == gate
+                                and other_value.get("round_id") == state["discussion_round"]):
                             raise HubError(f"已有有效 {gate} 决定。请更新原决定，或先记录作废再换用新决定。", 7)
-                    if gate == "direction":
+                    if gate in ("research", "direction"):
                         self._brief_gate(state, payload["decision_ids"])
+                    if gate == "research":
+                        materials = _refs(value.get("material_refs"), "research material_refs")
+                        if not materials:
+                            raise HubError("研究回交须指向实际给主创看的原件、发现稿或原型。", 7)
+                        for ref in materials:
+                            self._object(state, ref)
+                        payload["depends_on"] = list(dict.fromkeys(payload.get("depends_on", []) + materials))
+                    if gate == "direction":
+                        self._research_gate(state, payload["decision_ids"])
+                if gate == "writing":
+                    brief, direction = self._direction_gates(state, state.get("handoff"))
+                    if not {brief, direction}.issubset(payload["decision_ids"]):
+                        raise HubError("接笔委托须引用本轮委托和选定方向。", 7)
+                    modules = _list(value.get("modules"), "writing modules")
+                    for module_id in modules:
+                        self._object(state, "module:" + _id(module_id))
+                    if not modules or len(set(modules)) != len(modules):
+                        raise HubError("接笔范围须为非空且不重复的有序章节列表。", 7)
+                    _enum(value.get("mode"), {"chapter", "batch"}, "writing mode")
+                    _text(value.get("document_use"), "writing document_use")
+                if gate == "chapter_review":
+                    writing = self._verify_chapter_review(state, payload, chain)
+                    for other_id, other in state["decisions"].items():
+                        other_value = other.get("value")
+                        if (other_id != ident and other.get("status") == "confirmed"
+                                and isinstance(other_value, dict) and other_value.get("gate") == "chapter_review"
+                                and other_value.get("round_id") == state["discussion_round"]
+                                and other_value.get("module_id") == value["module_id"]
+                                and writing in other.get("decision_ids", [])):
+                            other["status"] = "superseded"
+                            replaced_reviews.add("decision:" + other_id)
                 if gate == "delivery":
                     self._verify_delivery_decision(project, state, payload, chain)
         if "dynamic" in payload and not isinstance(payload["dynamic"], bool):
@@ -1529,7 +1771,7 @@ class HubRuntime:
             # is corrected; rollback never erases real-world occurrences.
             obj["history"] = (previous.get("history", []) if previous else []) + [{"value": payload["new_value"], "status": status_value, "at": _now(), "revision": state["revision"], "artifact_id": artifact_id}]
         state[COLLECTIONS[kind]][ident] = obj
-        return {f"{kind}:{ident}", f"artifact:{artifact_id}"}
+        return {f"{kind}:{ident}", f"artifact:{artifact_id}"} | replaced_reviews
 
     def _apply_review(self, project: Path, stage: Path, state: dict, payload: dict, inputs: list[dict], operation_id: str) -> set[str]:
         ident = _id(payload["review_id"])
@@ -1619,7 +1861,7 @@ class HubRuntime:
                 # downstream owners have already been invalidated as appropriate.
                 if kind == "module":
                     fresh_refs = changed
-                elif kind in {"source", "change", "review", "handoff"}:
+                elif kind in {"source", "change", "review", "handoff", "reopen"}:
                     fresh_refs = changed
                 else:
                     fresh_refs = {"contract:current", "artifact:contract-current"}
@@ -1765,6 +2007,8 @@ class HubRuntime:
             packet = {"schema_version": SCHEMA_VERSION, "fingerprint_version": FINGERPRINT_VERSION,
                 "project_id": project_path.name,
                 "revision": head["revision"], "phase": state["phase"], "workflow_mode": state.get("workflow_mode", "legacy"),
+                "workflow_version": state.get("workflow_version"), "discussion_round": state.get("discussion_round"),
+                "human_workflow_required": state.get("workflow_version") != WORKFLOW_VERSION,
                 "module_id": module_id if current_module else None,
                 "required_refs": [ref for ref in requested_refs if ref in visible],
                 "task": task or (current_module["purpose"] if current_module else "Continue current research/production from project files"),
@@ -1788,7 +2032,7 @@ class HubRuntime:
                 "fingerprints": {row["ref"]: row["fingerprint"] for row in read_page},
                 "module": {key: current_module[key] for key in ("module_id", "applicability", "content_status", "stale") if key in current_module} if current_module else None,
                 "next_actions": ["Read required original files and full exceptions; record actual reading separately", "Use current revision as base; preserve a candidate before writeback"]}
-            if state.get("workflow_mode") == "collaborative" and role == "master":
+            if role == "master":
                 packet["next_actions"].insert(0, self._next_discussion(state))
                 if not task and not current_module:
                     packet["task"] = packet["next_actions"][0]
@@ -1868,6 +2112,11 @@ class HubRuntime:
                 raise HubError("Rollback target must be a validated committed ancestor", 4)
             current = chain[0]["state"]
             state = copy.deepcopy(target["state"])
+            if current.get("workflow_version") == WORKFLOW_VERSION:
+                for field in ("workflow_mode", "workflow_version", "discussion_round", "round_started_revision",
+                              "previous_discussion_round", "retained_refs"):
+                    if field in current:
+                        state[field] = copy.deepcopy(current[field])
             state["generation"] = current["generation"] + 1
             state["revision"] = self._new_revision(state["generation"])
             state["parent_revision"] = base
@@ -1921,11 +2170,16 @@ class HubRuntime:
             delivery_records = [obj for obj in state["decisions"].values()
                                 if state.get("workflow_mode") == "collaborative" and obj["status"] == "confirmed"
                                 and isinstance(obj.get("value"), dict) and obj["value"].get("gate") == "delivery"]
-            for obj in delivery_records:
+            chapter_records = [obj for obj in state["decisions"].values()
+                               if isinstance(obj.get("value"), dict) and obj["value"].get("gate") == "chapter_review"]
+            for obj in delivery_records + chapter_records:
                 # An adopted historical passage remains recorded even when
                 # rolling back to a version before its module existed.
                 obj["depends_on"] = [ref for ref in obj.get("depends_on", [])
                                      if not ref.startswith("module:") or ref.split(":", 1)[1] in state["modules"]]
+                if obj["value"].get("gate") == "chapter_review" and obj["value"]["module_id"] not in state["modules"]:
+                    obj["stale"] = True
+                    obj["stale_reasons"] = ["回滚后的版本没有原审阅章节，反馈保留为历史"]
             self._validate_state(state, project_path.name, state["revision"])
             affected = self._propagate(state, changed | dynamic_refs | condition_differences | restored_changed | restored_reviews,
                                        "Rollback restored historic content; reconcile current conditions and decisions", include_roots=True)
@@ -1992,6 +2246,13 @@ class HubRuntime:
         has_body = any(module.get("body_artifact_id") and module["applicability"] == "now" for module in state["modules"].values())
         if view == "editor" and modules is None and (state["phase"] == "research" or not has_body):
             handoff = state.get("handoff") if state["phase"] == "production" else None
+            if state.get("workflow_version") == WORKFLOW_VERSION and state.get("handoff"):
+                try:
+                    self._direction_gates(state, state["handoff"])
+                except HubError:
+                    handoff = None
+                else:
+                    handoff = state["handoff"]
             research = handoff or state.get("contract") or state.get("brief")
             if not research:
                 raise HubError("尚无已保存的讨论正文，请先写入委托、分流或原型比较稿。", 7)
@@ -2006,7 +2267,7 @@ class HubRuntime:
             raise HubError("Assembly requires current contract", 7)
         if view == "client" and "client" not in state["contract"].get("allowed_roles", ["client"]):
             raise HubError("当前契约仅供指定内部角色使用；请核对整份契约的客户阅读范围。", 7)
-        if view == "client" and state.get("workflow_mode") == "collaborative":
+        if view == "client":
             self._direction_gates(state, state.get("handoff"))
         if modules is None:
             selected = [ident for ident in state["contract"]["module_order"]
@@ -2022,6 +2283,8 @@ class HubRuntime:
             if ident not in state["modules"]:
                 raise HubError("Assembly module does not belong to this contract", 2)
             module = state["modules"][ident]
+            if view == "client":
+                self._writing_gate(state, module.get("decision_ids", []), ident)
             if view == "client" and (module.get("audience") != "client" or module["applicability"] != "now" or module["content_status"] != "reviewable"):
                 raise HubError(f"客户审阅稿只接受契约标为 client、当前需要且可评审的正文：{ident}", 7)
             blockers = self._blocking(state, ident)
@@ -2219,8 +2482,16 @@ def cli_main(entry: str, argv: list[str] | None = None) -> int:
             resume.add_argument("--page-size", type=int, default=40)
             resume.add_argument("--role", default="master")
             resume.add_argument("--required-ref", dest="required_refs", action="append")
+            reopen = commands.add_parser("reopen")
+            reopen.add_argument("--project", required=True)
+            reopen.add_argument("--base", required=True)
+            reopen.add_argument("--operation-id", required=True)
+            reopen.add_argument("--file", required=True)
+            reopen.add_argument("--source-id", dest="source_ids", action="append", required=True)
+            reopen.add_argument("--reason", required=True)
+            reopen.add_argument("--retain-ref", dest="retained_refs", action="append")
         elif entry == "writeback":
-            parser.add_argument("kind", choices=["source", "contract", "handoff", "module", "change", "review"])
+            parser.add_argument("kind", choices=["source", "contract", "handoff", "module", "change", "review", "reopen"])
             parser.add_argument("--project", required=True)
             parser.add_argument("--base", required=True)
             parser.add_argument("--operation-id", required=True)
@@ -2262,6 +2533,8 @@ def cli_main(entry: str, argv: list[str] | None = None) -> int:
                 response["pagination"] = packet["pagination"]
                 response["packet_summary"] = {"phase": packet["phase"], "module_id": packet["module_id"],
                     "workflow_mode": packet["workflow_mode"],
+                    "workflow_version": packet["workflow_version"], "discussion_round": packet["discussion_round"],
+                    "human_workflow_required": packet["human_workflow_required"],
                     "role": packet["role"], "restricted_dependencies": packet["restricted_dependencies"],
                     "fingerprint_version": packet["fingerprint_version"], "required_refs": packet["required_refs"],
                     "semantic_verification": "not performed", "context_telemetry": "unknown"}

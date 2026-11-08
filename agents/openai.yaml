@@ -1,6 +1,6 @@
 interface:
   display_name: "MKT Max 1"
-  short_description: "协助主创研究、推演和选择方向，按原稿与取舍逐章写成活动方案"
-  default_prompt: "用 $mkt-max-1 从我的原稿和眼前要做的决定开始，帮我调查、推敲创意；等我交代要写哪些章，再按我的取舍接笔。"
+  short_description: "沿人工节点协助主创研究和取舍，受托逐章写作并回交审阅"
+  default_prompt: "用 $mkt-max-1 先与我核对本轮委托，围绕我的原稿研究和发展创意。研究发现与方向交我判断，等我明确章节范围再接笔，默认逐章交我审阅；旧案重启先确认继承范围。"
 policy:
   allow_implicit_invocation: true

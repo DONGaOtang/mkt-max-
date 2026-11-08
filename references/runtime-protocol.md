@@ -1,6 +1,6 @@
 # 本地运行协议（schema_version 1，fingerprint_version 2）
 
-运行库为 `scripts/hub_runtime.py`，Python 3.10+，仅标准库。`HubRuntime(workspace_root: Path | str)` 暴露 `init`、`resume`、`submit`、`rollback`、`repair`，异常为 `HubError`，含 `exit_code` 和 `response`。所有写入限制在配置工作根目录；指定外部原件仅作只读输入。目录名、ID、相对路径拒绝 `..`、Windows 保留名称、符号链接和 junction。
+运行库为 `scripts/hub_runtime.py`，Python 3.10+，仅标准库。`HubRuntime(workspace_root: Path | str)` 暴露 `init`、`resume`、`reopen`、`submit`、`rollback`、`repair`，异常为 `HubError`，含 `exit_code` 和 `response`。所有写入限制在配置工作根目录；指定外部原件仅作只读输入。目录名、ID、相对路径拒绝 `..`、Windows 保留名称、符号链接和 junction。
 
 ## 公共调用与退出码
 
@@ -11,7 +11,10 @@ python scripts/start_agent.py init --name NAME [--id ID] [--brief FILE]
     [--brief-allowed-roles ROLE ROLE ...] [--config FILE]
 python scripts/start_agent.py resume --project ID_OR_PATH [--module ID] [--task TEXT]
     [--page 1] [--page-size 40] [--role master] [--required-ref source:S1] [--required-ref fact:F1] [--config FILE]
-python scripts/writeback.py source|contract|handoff|module|change|review
+python scripts/start_agent.py reopen --project ID_OR_PATH --base REV --operation-id ID
+    --file ACTUAL_RESTART_REQUEST --source-id SOURCE_ID --reason TEXT
+    [--source-id ANOTHER_SOURCE_ID] [--retain-ref module:Opening] [--config FILE]
+python scripts/writeback.py source|contract|handoff|module|change|review|reopen
     --project ID_OR_PATH --base REV --operation-id ID --payload JSON_FILE [--config FILE]
 python scripts/rollback.py --project ID_OR_PATH --base REV --operation-id ID
     --to REV --reason TEXT [--config FILE]
@@ -34,27 +37,31 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 `applicability` 为 `now | later | not_needed | unknown`，四者独立于正文成熟度和用户决定。`content_status` 为 `outline | draft | reviewable | needs_review | blocked | archived`；`reviewable` 仅表示可评审，绝不等于批准。初始化不生成固定模块。
 
-### 新项目怎样记录三次实际选择
+### 本轮委托、研究回交、接笔与章审
 
-新建持久化项目使用 `workflow_mode=collaborative`。单次轻量讨论在对话中照样给人看候选稿；需要保存时，委托原文可作初始化 Brief，分流简报或供选原型可作当前契约的 Markdown 正文。运行库的 `research`、`production` 只描述工作阶段。给策划人看过、同意当前方向、同意交付某节、发给客户、现场执行分别留证。
+新建持久化项目使用 `workflow_mode=collaborative`、`workflow_version=2`，生成 `discussion_round`。所有确认的人审记录在 `new_value.round_id` 填当前轮次。轻量讨论先给对应的具体材料和问题；已明确的局部委托可以直接完成。需要保存时，委托原文可作初始化 Brief，分流简报或原型比较可作当前契约的 Markdown 正文。运行库的 `research`、`production` 描述工作阶段，实际人审范围由下表记录。
 
 | 人要决定的事 | 写入和核验 | 未决时给人看什么 |
 |---|---|---|
-| A 核对委托和分流 | 把经核对的对象、首要目标、参与者动作、主路径及本轮用途用一句话写在 `contract.brief_scope`。交 `change`，其中 `entity="decision",status="confirmed",new_value={"gate":"brief","scope":"同一句话"}`。用用户原话已明确授权的部分即可。 | 显示简报、主次分流的依据及最影响内容的一个问题。 |
-| B 选择要深化的方针 | 另一条已确认决定采用 `new_value={"gate":"direction","policy":"选中的方向及适用条件"}`，`decision_ids` 引用 A。正式 `handoff` 的 `policy` 与 B 一致，同时引用 A 和 B，`sufficiency` 为 `ready` 或有明确未决影响的 `conditional`。 | 给可读原型、推荐理由和代价。仅登记为 `proposed` 的决定可继续讨论。 |
-| C 采纳实际阅读的内容 | 保留 `--view client` 实际导出的 Markdown 和同版 manifest。收到明确反馈后登记 `gate="delivery"`，引用展示版本、文件 SHA256 和实际采纳范围。 | 给客户审阅稿；编辑意见记入待改事项；等待采纳的内容保持待审。 |
+| A 核对委托和分流 | 当前契约 `brief_scope` 写经核对的对象、首要目标、主路径和本轮用途。决定为 `gate:"brief",scope:同一句话,round_id:当前轮次`。 | 交简报、继承范围与会改变工作的关键问题，等待对应答复。已有本轮明确原话可直接作为该答复。 |
+| 研究回交 | 决定为 `gate:"research",selection:主创采用或继续查的实际选择,material_refs:[typed refs],round_id`，`decision_ids` 引用 A，材料引用实际存在的原件、发现稿或原型。 | 交发现、细节、反例和使用建议，让主创补稿、发展或改变重点。 |
+| B 选择方针 | 决定为 `gate:"direction",policy:实际选定方针,round_id`，`decision_ids` 引用 A 和研究回交。`handoff.policy` 与 B 相同，引用 A/B，充分性为 `ready` 或带具体未决的 `conditional`。 | 给可读原型、差异和代价，等待取舍。选中创意以后可整理交接。 |
+| 接笔委托 | 有效交接保存后，决定为 `gate:"writing",modules:[有序章节ID],mode:"chapter"或"batch",document_use:本次读者用途,round_id`，引用 A/B。 | 回交主创原稿、编辑权限和章节安排。明确接笔后才进入 `production`。默认逐章，真实批量委托才填 `batch`。 |
+| C 章节反馈 | 决定为 `gate:"chapter_review",module_id,review_revision,body_sha256,outcome:"continue"或"revise",round_id`，引用对应 writing。所审祖先版本须属于本轮，正文指纹须与实际所示及当前正文一致。 | 可直接审内部 `draft`。章审反馈绑定章节正文，无须先导出客户版。逐章模式下，前章取得当前稿的继续反馈后才写下一章。 |
+| C 整稿或片段采纳 | 保留实际导出的客户 Markdown 和同版 manifest，决定为 `gate:"delivery",round_id`，附展示版本、文件指纹和采纳范围。 | 给完整阅读稿，明确哪版哪部分被采纳，待改部分继续处理。 |
 
-三类决定都使用原有的 `file,source_ids,decision_ids,old_value,new_value,reason,impact` 字段。`file` 留决定人原话、所审版本/文件、选定范围及保留意见；A/B/C 登记为 `confirmed` 时，`source_ids` 必须引用至少一条对应回复或原委托来源。A 确认前必须已有范围相符、有效的当前契约。`confirmation:{actor,at,evidence}` 写实际决定人、时间和可追溯消息位置。研究者、模型角色或脚本产出的评价只作建议。运行库核对声明、依赖和文件指纹；人员身份、实际阅读及授权范围须靠真实回复核实。
+这些决定沿用 `file,source_ids,decision_ids,old_value,new_value,reason,impact`。`file` 留决定人原话、所审版本、范围及保留意见，确认时 `source_ids` 必须引用实际答复或委托来源。`confirmation:{actor,at,evidence}` 写实际决定人、时间及消息位置。研究者和脚本产出的评价作为建议。运行库核声明、依赖、轮次及字节，实际阅读、身份和权限依据由主控从真实回复核实。人的一次回复可以明确覆盖同一轮多个事项，分别记录其具体范围。
 
 同一委托中，B 记主创实际选择的方针。预算、资源或公开说法若另待决定，可另留普通 `decision` 或 `question`，用 `impact` 指向依赖放行的承诺。例如未获批费用会卡下单，供老板比较费用的判断稿仍可提交审阅。判断稿引用的是估算和业务事实，这些依据一变就要复核该稿。使用 `conditional` 交接时，写明阻断对象、解除条件和仍可写的章。确认状态以当事人原话、其实际权限和适用范围为据。
 
-主方针或委托确实改选时，更新同一条 A/B 或先将原决定登记为 `superseded`。改变委托重点会使旧 A 和引用它的 B 待复核。撤销、失效或与当前方针不符时，交接、依赖该方针的正式模块提交和客户版组装均会阻断。回滚仍保留后续真实决定。重新进入生产前，用当前有效的 A、B 重交交接，更新受影响的正文。研究阶段可用编辑视图看当前讨论稿；已提出的其他想法继续作为可逆草案。
+主方针或委托改选时更新原决定，或先记 `superseded` 再换决定。改变委托重点使依赖它的方向及接笔待复核。撤销、失效或与当前方针不符时，相关正式写入和客户版组装阻断。回滚保留当前轮次及后续真实决定。重新进入生产前核当前研究取舍、方向、交接与接笔范围。普通意见已经明确时按意见改当前章；改稿后的章审重新绑定实际正文。条件变化按依赖处理，独立成立的主创片段继续保留其原文。
 
 **C 的记录示例。** 一份完整客户审阅稿含“项目缘起”和“现场体验”两个模块。用户只说“现场体验里这句保留”，记录的 `new_value` 如下。示例中的版本和指纹须换成实物 manifest 的值。
 
 ```json
 {
   "gate": "delivery",
+  "round_id": "当前resume返回的discussion_round",
   "review_revision": "r000012-example",
   "review_sha256": "实际展示的客户审阅稿SHA256",
   "accepted_sections": [{"module_id":"Experience","quote":"给同伴留一道线索。"}]
@@ -65,7 +72,9 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 回复在后续版本收到也能登记。脚本回读已提交祖先上的原稿及同版 manifest，与权威快照重建的版本、读者视图、模块范围、输入指纹、状态及成稿字节逐项核对，再核当前正文及成立条件。未采纳章节独立修订、另行登记回复来源均可保留。获采纳模块已修改，即使只摘录一句，也先保留原话并让用户核对新版上下文。后续重交同一方向的交接，或增改结构化问题，只对影响该采纳范围的条件重新核对。原话和看过的版本仍可回读。
 
-**恢复讨论。** 用 `resume --required-ref decision:A --required-ref decision:B`（把 A、B 换成本项目真实 ID），或加上相应的 C 决定。读返回的 `current_decisions`、对应决定原文、来源原件，以及 C 的 `review_revision` 目录内的阅读稿和 manifest。跨页查看完整记录，从原话复述上轮选择和待办。历史项目没有 `workflow_mode` 时，继续用原交接、写回及默认组装契约；重开讨论仍按本技能的 A/B/C 节奏核对当前取舍。
+**恢复讨论。** 用 `resume --required-ref decision:A --required-ref decision:B`（替换为真实 ID），补入研究、接笔或章审记录。回读 `current_decisions`、决定与来源原文、所示版本及正文，从原话说明本轮待办。`human_workflow_required:true` 表示旧模式须先重开；在 `task` 写“回到第一阶段”只改变任务说明。
+
+**旧案重开。** 先保存主创本次原话为 source，再调用 `reopen(project,base,operation_id,file,source_ids,reason,retained_refs=None)`，或上面的 CLI。输入含重开原话、来源、原因及用户明确保留的对象。操作生成新版本和新轮次，进入 `research`，旧契约、交接和人工授权保留历史并待核；明确保留的模块保留原文状态，其内容仍按本轮用途核对。回交继承范围后保存当前契约，登记本轮 A、研究取舍、B、交接及接笔。祖先快照、真实业务事实和外部事件继续可回查。重试同 operation-id 使用同一 base 和载荷，按原幂等规则返回已有结果。
 
 ### source
 
@@ -83,7 +92,7 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 ### handoff
 
-必填：`file, policy, decision_ids, source_ids, inventory_source_ids, sufficiency, unresolved`。`policy` 非空文本；`sufficiency` 为 `ready | conditional | blocked`。`inventory_source_ids` 覆盖当前全部来源ID（目录识别），`source_ids` 为本交接采用来源。可选 `module_ids, artifact_ids, depends_on`，用于登记本交接已经采用的上游成果。`unresolved` 每项为 `{question, impact:[typed refs], blocking:bool, owner_role, next_action, finalization_boundary}`。新项目 `blocked` 直接阻断正式交接；`conditional` 须有未决及影响，且 A、B 均有效。旧项目保留历史处理。进入 production 后，具体未决按影响约束相应模块。
+必填：`file, policy, decision_ids, source_ids, inventory_source_ids, sufficiency, unresolved`。`policy` 非空文本；`sufficiency` 为 `ready | conditional | blocked`。`inventory_source_ids` 覆盖当前全部来源 ID，`source_ids` 为交接实际采用来源。可选 `module_ids,artifact_ids,depends_on`。`unresolved` 每项为 `{question,impact:[typed refs],blocking:bool,owner_role,next_action,finalization_boundary}`。正式交接要求当前轮次 A、研究取舍与 B 有效；`blocked` 阻断交接，`conditional` 须列具体未决及影响。交接之后还需当前接笔委托，才进入 `production`，各未决继续按影响约束相应模块。
 
 `blocking` 判断**当前契约document_use及delivery_depth**是否允许提交可评审正文/组装，不把已披露的后续执行限制一律套在当前评审稿。例：日期未知但只交概念/文字评审案，写 `blocking:false`，边界仍明确“正式邀请发送前由主办核真实日期和入口”；契约改为发送就绪或执行交接时，该必要信息未取得写 `blocking:true`。`finalization_boundary` 是作者给接手人的说明，脚本不解析它来自动识别用途，也不判断实际发送授权。核心内容缺失仍阻断相应评审，不得借未来条件稿为名跳过正文。
 
@@ -92,6 +101,8 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 必填：`file, module_id, source_ids, decision_ids, changes, impact, content_status, acceptance_evidence`。模块须在当前契约中存在，适用为 `now` 或 `later`；`unknown` 不允许写成已就绪内容，`not_needed` 不生产正文。`changes` 非空说明或非空列表，`impact` 为 typed refs 列表。`acceptance_evidence` 非空文本或非空列表，是作者说明，脚本不认证语义。可选 `depends_on, fact_ids, unresolved, units, handoff_artifacts`。`handoff_artifacts` 每项含 `artifact_id,file,recipient_role,purpose,content_status`，保存实际接手文件；`units` 每项含 `unit_id,title,artifact_id`，引用本模块真实产物。`reviewable` 在相关 blocking 未决或失效依赖未处理时拒绝；draft 可条件推进。`source_ids/decision_ids/fact_ids` 与契约及提交关系合并，不能通过省略引用摆脱既有依赖。
 
 契约更新保留正文实际采用的追加依据、依赖与单元，`contract_spec` 单独记录当前约定。重写正文后可用 `remove_dependencies: [typed ref]` 显式移除已经不采用的旧关系；仍由当前契约要求或本次重新采用的关系不得移除，省略字段不等于删除。历史版本仍保留原依据。
+
+正式模块的 `decision_ids` 须明确引用本轮覆盖该章的 writing。逐章模式核此前章节当前正文的继续反馈，明确批量模式覆盖所列章组。未列章节不能借其他章的委托开写。修改同一章可以沿既有委托进行，后续章节仍须核所依反馈与内容版本。
 
 ### change
 
@@ -131,10 +142,12 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 任务包可使用 `allowed_roles: [角色名]` 限定来源、契约、模块、变化对象、复核和接手产物。**原始来源和初始化Brief默认 `master` 范围**；未分类资料不会自动分发公开角色。来源要共享必须显式登记 `allowed_roles`；Brief要共享用API可选 `brief_allowed_roles=[...]` 或CLI `--brief-allowed-roles ...`。其余新对象未指定时保持开放并继承依赖限制，已有对象更新时省略此字段保留原限制，master可维护全量。早期schema-1原始资料未记录范围时也按master处理，不改不可变历史。
 
+写作授权还须继承其章节范围的可见性。包含受限章节的完整授权留在主控范围，向其他角色提供实际获托范围的材料。该关系用于权限过滤，内容依赖图保持原方向。明确批量委托可按实际公开与内部范围分别记录，仍引用同一次真实答复。扩展到新章节时保留仍有效的原章委托，新增范围单独记录，以免无关章节和执行单元因扩大范围一并失效。
+
 限制经登记的前置依赖、模块契约和产物owner继承，以拒绝集合沿反向依赖传播至固定点计算，权限关系中的合法循环不会因遍历顺序放开受限对象；公开角色的目录、原件入口、决定预览与指纹文件均过滤；全量state/指纹入口不会交给该角色。包含混合权限模块的完整契约、含受限资料清单的完整交接保持受限，主控需提供获授权的脱敏输入。受限必要输入返回 `blocked`（API仍含过滤后的packet，CLI退出7），仅显示受限数量/处理动作，不显示私有标题、值、路径或指纹。这是**包范围过滤**，不宣称文件系统ACL、身份认证或语义自动脱敏。
 
 **编辑阅读。** 新项目默认 `--view editor`，输出 `editor-review.md`。研究阶段装入契约讨论正文，尚无契约时采用 Brief；B 通过、当期还没写模块时装入已确认方针交接。已有模块时按契约次序汇集当前已写正文与接手附件，显示草案、待复核及阻断事项。可用 `--modules` 单独审某一模块。编辑稿供内部讨论。
 
 **客户阅读。** 契约模块显式填 `audience:"client"` 才能进入 `--view client` 的 `client-review.md`，默认未标模块用于内部。仅使用当期 `now`、`reviewable`、无失效和当前阻断的客户正文。整份契约、模块契约、当前模块和正文中显式的 `allowed_roles` 限制都须包含 `client`。若工作件含内部材料，在已明确可交客户的范围里另写独立正文并核准读者。组装不收接手附件；编辑仍须核对正文中的敏感信息、内部链接、未证承诺和客户必须知道的条件。项目标题统一在首行，模块开头的同名一级标题去重，其他模块一级标题降为二级。新稿和同版 `.manifest.json` 存在 `deliverables/<revision>/`，manifest 记录模块范围、原件指纹、实际稿件 SHA256 及 `awaiting_review`。部分组装文件名带选集后缀。
 
-**旧项目接续。** 无模式标记的项目默认组装仍保留原 `complete-plan.md` 或 `selection-…md`、原字节格式与附件顺序；可显式选新阅读视图。旧默认稿供历史接续。Word、PPT 及现场交付分别验收。`repair` 重建中枢、目录及操作索引；历史或关键文件损坏须修复实际来源。
+**旧项目接续。** 旧存档可读取、回查，并用编辑视图讨论。新的正式交接、章节写入和客户组装要求先 `reopen` 进入本轮 v2 协作。已有交付原件保留原路径与版本身份。Word、PPT 及现场交付分别验收。`repair` 重建中枢、目录及操作索引；历史或关键文件损坏须修复实际来源。
