@@ -16,7 +16,7 @@ python scripts/writeback.py source|contract|handoff|module|change|review
 python scripts/rollback.py --project ID_OR_PATH --base REV --operation-id ID
     --to REV --reason TEXT [--config FILE]
 python scripts/repair.py --project ID_OR_PATH [--config FILE]
-python scripts/assemble.py --project ID_OR_PATH [--modules ID ID ...] [--config FILE]
+python scripts/assemble.py --project ID_OR_PATH [--view editor|client] [--modules ID ID ...] [--config FILE]
 python scripts/cost_check.py --project ID_OR_PATH [--config FILE]
 ```
 
@@ -34,6 +34,39 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 `applicability` 为 `now | later | not_needed | unknown`，四者独立于正文成熟度和用户决定。`content_status` 为 `outline | draft | reviewable | needs_review | blocked | archived`；`reviewable` 仅表示可评审，绝不等于批准。初始化不生成固定模块。
 
+### 新项目怎样记录三次实际选择
+
+新建持久化项目使用 `workflow_mode=collaborative`。单次轻量讨论在对话中照样给人看候选稿；需要保存时，委托原文可作初始化 Brief，分流简报或供选原型可作当前契约的 Markdown 正文。运行库的 `research`、`production` 只描述工作阶段。给策划人看过、同意当前方向、同意交付某节、发给客户、现场执行分别留证。
+
+| 人要决定的事 | 写入和核验 | 未决时给人看什么 |
+|---|---|---|
+| A 核对委托和分流 | 把经核对的对象、首要目标、参与者动作、主路径及本轮用途用一句话写在 `contract.brief_scope`。交 `change`，其中 `entity="decision",status="confirmed",new_value={"gate":"brief","scope":"同一句话"}`。用用户原话已明确授权的部分即可。 | 显示简报、主次分流的依据及最影响内容的一个问题。 |
+| B 选择要深化的方针 | 另一条已确认决定采用 `new_value={"gate":"direction","policy":"选中的方向及适用条件"}`，`decision_ids` 引用 A。正式 `handoff` 的 `policy` 与 B 一致，同时引用 A 和 B，`sufficiency` 为 `ready` 或有明确未决影响的 `conditional`。 | 给可读原型、推荐理由和代价。仅登记为 `proposed` 的决定可继续讨论。 |
+| C 采纳实际阅读的内容 | 保留 `--view client` 实际导出的 Markdown 和同版 manifest。收到明确反馈后登记 `gate="delivery"`，引用展示版本、文件 SHA256 和实际采纳范围。 | 给客户审阅稿；编辑意见记入待改事项；等待采纳的内容保持待审。 |
+
+三类决定都使用原有的 `file,source_ids,decision_ids,old_value,new_value,reason,impact` 字段。`file` 留决定人原话、所审版本/文件、选定范围及保留意见；A/B/C 登记为 `confirmed` 时，`source_ids` 必须引用至少一条对应回复或原委托来源。A 确认前必须已有范围相符、有效的当前契约。`confirmation:{actor,at,evidence}` 写实际决定人、时间和可追溯消息位置。研究者、模型角色或脚本产出的评价只作建议。运行库核对声明、依赖和文件指纹；人员身份、实际阅读及授权范围须靠真实回复核实。
+
+同一委托中，B 记主创实际选择的方针。预算、资源或公开说法若另待决定，可另留普通 `decision` 或 `question`，用 `impact` 指向依赖放行的承诺。例如未获批费用会卡下单，供老板比较费用的判断稿仍可提交审阅。判断稿引用的是估算和业务事实，这些依据一变就要复核该稿。使用 `conditional` 交接时，写明阻断对象、解除条件和仍可写的章。确认状态以当事人原话、其实际权限和适用范围为据。
+
+主方针或委托确实改选时，更新同一条 A/B 或先将原决定登记为 `superseded`。改变委托重点会使旧 A 和引用它的 B 待复核。撤销、失效或与当前方针不符时，交接、依赖该方针的正式模块提交和客户版组装均会阻断。回滚仍保留后续真实决定。重新进入生产前，用当前有效的 A、B 重交交接，更新受影响的正文。研究阶段可用编辑视图看当前讨论稿；已提出的其他想法继续作为可逆草案。
+
+**C 的记录示例。** 一份完整客户审阅稿含“项目缘起”和“现场体验”两个模块。用户只说“现场体验里这句保留”，记录的 `new_value` 如下。示例中的版本和指纹须换成实物 manifest 的值。
+
+```json
+{
+  "gate": "delivery",
+  "review_revision": "r000012-example",
+  "review_sha256": "实际展示的客户审阅稿SHA256",
+  "accepted_sections": [{"module_id":"Experience","quote":"给同伴留一道线索。"}]
+}
+```
+
+整章获采纳可填 `accepted_modules:["Experience"]`；只采纳某句话或段落，`accepted_sections` 的逐字摘录须在该模块展示文字中唯一匹配。可混合记录不同模块的整章和片段。仅有片段时 `accepted_modules` 保存为空。用户明确同意整个展示稿时可省略两项。原本展示的是 `--modules Intro Experience` 选集才加 `modules:["Intro","Experience"]`；看的是全稿就省略 `modules`，不用另造一份子集稿。
+
+回复在后续版本收到也能登记。脚本回读已提交祖先上的原稿及同版 manifest，与权威快照重建的版本、读者视图、模块范围、输入指纹、状态及成稿字节逐项核对，再核当前正文及成立条件。未采纳章节独立修订、另行登记回复来源均可保留。获采纳模块已修改，即使只摘录一句，也先保留原话并让用户核对新版上下文。后续重交同一方向的交接，或增改结构化问题，只对影响该采纳范围的条件重新核对。原话和看过的版本仍可回读。
+
+**恢复讨论。** 用 `resume --required-ref decision:A --required-ref decision:B`（把 A、B 换成本项目真实 ID），或加上相应的 C 决定。读返回的 `current_decisions`、对应决定原文、来源原件，以及 C 的 `review_revision` 目录内的阅读稿和 manifest。跨页查看完整记录，从原话复述上轮选择和待办。历史项目没有 `workflow_mode` 时，继续用原交接、写回及默认组装契约；重开讨论仍按本技能的 A/B/C 节奏核对当前取舍。
+
 ### source
 
 必填：`file, source_id, title, producer, locator, published_at, occurred_at, accessed_at, version, access_status, read_scope, supports, limitations`。
@@ -50,7 +83,7 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 ### handoff
 
-必填：`file, policy, decision_ids, source_ids, inventory_source_ids, sufficiency, unresolved`。`policy` 非空文本；`sufficiency` 为 `ready | conditional | blocked`。`inventory_source_ids` 覆盖当前全部来源ID（目录识别），`source_ids` 为本交接采用来源。可选 `module_ids, artifact_ids, depends_on`。`unresolved` 每项为 `{question, impact:[typed refs], blocking:bool, owner_role, next_action, finalization_boundary}`。`conditional`/`blocked` 必须有未决；不能把目录列出等同原文已读。保存真实交接后进入 production；相关阻断通过未决影响图约束，不停止无依赖任务。
+必填：`file, policy, decision_ids, source_ids, inventory_source_ids, sufficiency, unresolved`。`policy` 非空文本；`sufficiency` 为 `ready | conditional | blocked`。`inventory_source_ids` 覆盖当前全部来源ID（目录识别），`source_ids` 为本交接采用来源。可选 `module_ids, artifact_ids, depends_on`，用于登记本交接已经采用的上游成果。`unresolved` 每项为 `{question, impact:[typed refs], blocking:bool, owner_role, next_action, finalization_boundary}`。新项目 `blocked` 直接阻断正式交接；`conditional` 须有未决及影响，且 A、B 均有效。旧项目保留历史处理。进入 production 后，具体未决按影响约束相应模块。
 
 `blocking` 判断**当前契约document_use及delivery_depth**是否允许提交可评审正文/组装，不把已披露的后续执行限制一律套在当前评审稿。例：日期未知但只交概念/文字评审案，写 `blocking:false`，边界仍明确“正式邀请发送前由主办核真实日期和入口”；契约改为发送就绪或执行交接时，该必要信息未取得写 `blocking:true`。`finalization_boundary` 是作者给接手人的说明，脚本不解析它来自动识别用途，也不判断实际发送授权。核心内容缺失仍阻断相应评审，不得借未来条件稿为名跳过正文。
 
@@ -100,4 +133,8 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 限制经登记的前置依赖、模块契约和产物owner继承，以拒绝集合沿反向依赖传播至固定点计算，权限关系中的合法循环不会因遍历顺序放开受限对象；公开角色的目录、原件入口、决定预览与指纹文件均过滤；全量state/指纹入口不会交给该角色。包含混合权限模块的完整契约、含受限资料清单的完整交接保持受限，主控需提供获授权的脱敏输入。受限必要输入返回 `blocked`（API仍含过滤后的packet，CLI退出7），仅显示受限数量/处理动作，不显示私有标题、值、路径或指纹。这是**包范围过滤**，不宣称文件系统ACL、身份认证或语义自动脱敏。
 
-`assemble` 从已校验快照依契约顺序拼接已有完整模块正文和实际接手件，保存至 `deliverables/<revision>/`，带版本及输入指纹；缺正文、stale或相关blocking条件返回7。组装不宣称语义、资源、原生Word/PPT或真实活动已通过。默认只组装 applicability=now 的模块，不为未约定模块造内容。`repair` 重建中枢、目录及操作索引，不改权威版本；历史或关键文件损坏必须明确处理，不能用修复视图掩盖损坏。
+**编辑阅读。** 新项目默认 `--view editor`，输出 `editor-review.md`。研究阶段装入契约讨论正文，尚无契约时采用 Brief；B 通过、当期还没写模块时装入已确认方针交接。已有模块时按契约次序汇集当前已写正文与接手附件，显示草案、待复核及阻断事项。可用 `--modules` 单独审某一模块。编辑稿供内部讨论。
+
+**客户阅读。** 契约模块显式填 `audience:"client"` 才能进入 `--view client` 的 `client-review.md`，默认未标模块用于内部。仅使用当期 `now`、`reviewable`、无失效和当前阻断的客户正文。整份契约、模块契约、当前模块和正文中显式的 `allowed_roles` 限制都须包含 `client`。若工作件含内部材料，在已明确可交客户的范围里另写独立正文并核准读者。组装不收接手附件；编辑仍须核对正文中的敏感信息、内部链接、未证承诺和客户必须知道的条件。项目标题统一在首行，模块开头的同名一级标题去重，其他模块一级标题降为二级。新稿和同版 `.manifest.json` 存在 `deliverables/<revision>/`，manifest 记录模块范围、原件指纹、实际稿件 SHA256 及 `awaiting_review`。部分组装文件名带选集后缀。
+
+**旧项目接续。** 无模式标记的项目默认组装仍保留原 `complete-plan.md` 或 `selection-…md`、原字节格式与附件顺序；可显式选新阅读视图。旧默认稿供历史接续。Word、PPT 及现场交付分别验收。`repair` 重建中枢、目录及操作索引；历史或关键文件损坏须修复实际来源。

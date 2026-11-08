@@ -1,67 +1,51 @@
 [简体中文](README.md) | [English](README.en.md)
 
-![MKT Max 1 — From research and decisions to complete content and project continuity](assets/readme-hero.png)
+![MKT Max 1 event planning workflow](assets/readme-hero.png)
 
 # MKT Max 1
 
-**An Agent skill and local file runtime for event projects: research the brief, establish a direction, produce complete content, and resume the work in a later conversation.**
+MKT Max 1 helps a planner develop an event idea and turn the chosen direction into a readable proposal. In the first stage, **you are the lead author**. The assistant researches the market, investigates creative leads and helps you test alternatives. In the second stage, **you commission chapters and the assistant writes them** using your original material and decisions. A local Python runtime keeps the work available across conversations.
 
-For planners, event leads, and the content, design, operations, and commercial collaborators who review or take over their work. Requirements, sources, decisions, content, and changes live in readable project files, with a short hub for navigation rather than a chat summary carrying all project knowledge.
+**Experimental release candidate 1.2.0-rc.3.** The skill and its working references are primarily in Chinese. The release has three known runtime defects, including a privacy issue after rollback. [Version record](version.json) · [Known issues](#validation-and-known-issues)
 
-> **Current release: experimental 1.1.0.** [version.json](version.json) is the version authority. Confirmed problems with permission propagation, submission status, and unit invalidation remain unresolved; read “Current status and known issues” below before use. Existing validation does not establish performance in real roles, with real audiences, or in the market.
+## How a project moves through the two stages
 
-**Language status:** the skill instructions and reference library are primarily in Chinese. This English README documents usage; English-language deliverables have not been independently validated.
+| Step | What the planner does | What the assistant brings back |
+|---|---|---|
+| 1. Frame the assignment | Name the audience, the problem and what you need to decide or deliver now. | A short restatement in your words, what the audience already does, and the missing fact most likely to change the direction. A focused commission can end with a cost check, invitation or revised paragraph. |
+| 2. Research and develop ideas | Write freely, share a fragment or ask the assistant to find an opportunity. Keep competing ideas alive when the choice is still open. | Dated sources, an observed choice or constraint, creative possibilities grounded in that evidence, and a short trial of how an idea would feel to a participant. |
+| 3. Choose a direction and hand it over | Select the experience or wording you want, explain your trade-off and identify what the writer may change. | The original passage alongside your decision, its reason, rejected alternatives, unresolved conditions and the chapters this material can support. It distinguishes wording to keep verbatim, wording open to editing, intent to preserve and material to withhold. |
+| 4. Write commissioned chapters | Specify the sections, audience and scope. Review the actual opening, chapter or deliverable as it becomes available. | Readable prose for the intended reader. For each chapter the assistant rereads the originals, the decision record and adjoining sections, then checks names, numbers, claims, transitions and dependencies. |
+| 5. Revise and accept | When a condition changes, decide any affected business or creative question. Identify the exact text you accept. | Rechecked evidence, revised passages and a review copy. The assistant also reads the surrounding prose for implications outside the recorded dependency links. |
 
-## What it helps with
+Three decisions can arise during this work. **A** agrees the commission. **B** selects a direction. **C** records acceptance of text someone actually read. An existing decision can be carried forward. A small request can finish at the requested output. A chosen opening can support an internal rehearsal while funding and publication remain separate decisions. Acceptance can cover a complete version, a module or a uniquely identifiable passage in the version shown. [Workflow and decisions](references/workflow-and-decisions.md) · [Authorship and chapter writing](references/author-and-chapter-writing.md)
 
-- **Research that can support production.** Retain original source locations, declared reading coverage, the current direction, its conditions, and open questions, so the next stage can inspect the evidence.
-- **Deliverables with actual content.** Write the agreed scenes, flows, rules, copy, and handover files. Outlines, schedules, status tables, and representative samples do not replace promised full content.
-- **Continuity and focused revisions.** Use revision-bound task packets to locate current content and evidence, identify affected work through registered dependencies, and retain candidates and history.
-- **Scope that follows the project.** Initialization creates no fixed marketing modules. Work is classified as needed now, needed later, not needed, or not yet known before it is scheduled.
+If you commission a post-event review, the assistant compares actual attendance, participant choices, costs and unexpected effects with the original objectives. Before the event it can prepare what to observe, when and by whom. [Seven planning tasks](references/workflow-and-decisions.md)
 
-The package contains skill instructions, 17 references loaded as needed, and 7 Python scripts. **The scripts do not call a model, start an Agent, provide web search, or generate native Word, PowerPoint, or design source files.** Search, reading, judgment, writing, image inspection, and other document production depend on the host's actual capabilities.
+## Research, simulation and decision owners
 
-## Suitable projects and optional modules
+The event format follows what participants must actually do and which outcome the organizer would miss most. A “theatre open day” can call for three different plans. A public experience needs a visitor to hear a difference between seats. Volunteer recruitment needs a newcomer to lead a short reading and receive feedback. A recognition ceremony needs a colleague’s verified contribution and their consent to share it. When two outcomes compete for the same time or staff, the planner chooses which governs the research and first draft. [Event routing and examples](references/event-routing.md)
 
-Use it for online, physical, or hybrid events; individual events or series; and partial deliverables, reviews, or revisions of existing plans. Research depth, content depth, and handover format follow the recipient's intended use.
+The assistant starts with a decision that could change. For a dated price, recruitment channel or competing event, it retrieves the current source, records the date and scope, compares it with the prior assumption and explains which choice the finding affects. Live retrieval requires search and page access from the host. Consumer simulation follows one person's choices across real alternatives, including price, time, friction and reasons to leave. Scenario rehearsal follows the people who must handle a disruption, capacity limit or handover. Simulated reactions stay labelled as hypotheses until checked against interviews, observations or records. [Dynamic research and simulation](references/dynamic-research-and-simulation.md)
 
-| Project need | Relevant work |
-|---|---|
-| New project, unclear direction, or insufficient material | Requirements, evidence checks, comparisons, counterarguments, direction, and stage handover |
-| An established direction needing reviewable or usable content | Content units, participant experiences, concrete scenes, mechanisms, rules, and full copy |
-| Recruitment, communication, or online service | Materials based on real channels, entry points, follow-through, and service conditions |
-| Staffing, venues, technology, or production | Roles, capacity, shifts, design handovers, operational interfaces, and failure handling |
-| Pricing, ticketing, sales, partnerships, or sponsorship | Costs, transaction terms, benefits, inventory, and fulfillment as needed |
-| Multiple events, content installments, or shared resources | Series relationships, calendars, resources, costs, and rescheduling effects |
-| Measurement, closeout, or learning | Metric definitions, evidence, feedback, validity conditions, and reusable records |
+| Decision | Who contributes or decides | What they see |
+|---|---|---|
+| Invest, defer or redirect spending | The budget holder decides. Insights and data owners check the audience, baseline and attribution. | Incremental benefit against the existing activity, competing uses of money and staff, a recommendation and the evidence that could reverse it. |
+| Choose a creative direction or release a claim | The creative lead selects the experience. Brand, product or rights owners verify the specific claim. The authorized publisher decides release. | The original and trial wording, supporting source, intended audience and exact version proposed for the channel. |
+| Recruit and serve participants | Sales, CRM, stores or channel owners verify matching rules, capacity, staffing and follow-up within their remit. | One example traced from entry to handover, distinguishing existing demand, additional demand and occupied slots. |
+| Commit production resources or partner benefits | The producer, supplier or partner confirms what they control. The authorized project owner commits the project. | The relevant run sheet, resource or benefit, dependency, deadline and fallback. |
 
-Marketing, sales, slogans, temporary staffing, full design work, ticketing, sponsorship, and series coordination are enabled by actual requirements. A technique used in one case does not become mandatory for every project. This package is not an automatic publishing, campaign operations, or event execution system.
+A department enters when its evidence or authority can resolve the current decision. For a series, the team can share an overall direction while tracking location-specific decisions and effects across dates. [Decision routing](references/event-routing.md) · [Series planning](references/series-orchestration.md)
 
-## Two stages, a short hub, and actual content
+A commissioning client might need a proposal they can read at a meeting. A producer taking over the same event might need a timed run sheet, cue, owner and fallback for each handover. Budgets, media copy, design briefs and follow-up measures enter when someone has a use for them. The bundled assembler produces Markdown. Office documents and artwork require suitable host tools and a check of the actual exported file. [Production and design handoff](references/staffing-and-design-handoff.md) · [Costs](references/commercial-and-cost.md) · [Measurement](references/measurement-and-learning.md)
 
-**Stage 1: research, judgment, and direction.** Start with the brief, audience needs, and source material. Check important claims, compare alternatives, develop the strongest counterargument, and assess whether the material is sufficient. Hand over the effective direction, original source locations, reading coverage, conditions, open questions, and production tasks.
+## Where the planning methods come from
 
-**Stage 2: complete content production and delivery.** Write the contracted material: what happens, who it serves, what participants see, hear, and do, how it starts and ends, what they receive, and the dependencies and failure handling. Continue an established direction; revisit the relevant research or decision when new evidence overturns it.
+The skill adapts published excerpts from six event-planning books. Wang Chunlei and Chen Xiaolian connect the organizer’s purpose to observable stakeholder outcomes. Frissen, Janssen and Luijer connect the experience to participant effort, opportunity cost and the action expected afterwards. Raj and Rashid inform the comparison with competing events, willingness to pay, sponsorship and feasibility. Matthews informs supplier checks before committing to production. Su Hai distinguishes the concept proposal, budget, assignments and event-day schedule. Getz informs the distinction between an output delivered and a later outcome, including costs borne by other stakeholders. The reading guide identifies the edition, pages or preview available, source links and the specific planning action derived from each. The A/B/C decisions belong to this skill’s collaboration design. [Reading guide and source pages](references/event-planning-books.md) · [ceyuan and software provenance](references/provenance.md)
 
-Closeout and feedback remain follow-up work within the original project, without adding a third plan-approval stage.
+## Try it in one project
 
-The project preserves three layers:
-
-| Layer | Purpose |
-|---|---|
-| Short hub, `项目中枢.md` | Navigate the current stage, module status, important conditions, and file locations |
-| Original sources, actual content, and handover files | Support research, writing, review, and delivery; large bodies are not embedded in every task packet |
-| Revisions, dependencies, and task packets | Record the current baseline, input fingerprints, change effects, and locations needed to resume |
-
-Summaries do not replace originals, and listing a file does not prove it was read. Facts, user decisions, creative proposals, and outcome hypotheses are distinguished. Written completion, confirmed resources, user approval, external execution, and observed results are checked separately. Judgments use high / medium / low / unknown confidence; model self-ratings do not establish market outcomes.
-
-## Requirements and installation
-
-Use **Python 3.10 or later**. The scripts use only the standard library; no `pip install` is needed. Git is required for the clone command below; downloading and extracting a repository archive is another option.
-
-Your Agent host must be able to read the complete skill and its references, read and write the project workspace, and execute local Python. Online research additionally requires search and page-reading tools supplied by the host. In a text-only environment without these capabilities, the method can still inform work, but files cannot be claimed as saved, packets as restored, or commands as executed.
-
-### 1. Obtain the complete directory
+Clone the complete directory. From your agent host, point the current project at the checkout’s `SKILL.md`. Your host needs file access and local command execution to persist work. The scripts use Python 3.10+ and the standard library. [Skill entry point](SKILL.md)
 
 ```shell
 git clone https://github.com/DONGaOtang/mkt-max-.git mkt-max-1
@@ -69,167 +53,41 @@ cd mkt-max-1
 python --version
 ```
 
-The local directory is named `mkt-max-1` to match the skill name in [SKILL.md](SKILL.md). Follow your host's installation rules to place the **complete directory** in its skills location. Alternatively, ask the Agent to read the full absolute path to your local `SKILL.md`, such as `C:/your-path/mkt-max-1/SKILL.md`, and load adjacent references as needed. Installation, discovery, and tool permissions differ by host; this repository does not provide a universal installer.
+On Windows, run the following from the checkout in PowerShell. Copy the example once, then edit `workspace_root` in your personal `config.json` to an absolute folder for your projects, such as `C:/MktMaxWorkspace`. On other systems use an absolute path appropriate to your machine. [Example configuration](config.example.json)
 
-### 2. Create a personal configuration
-
-Run the following commands from the repository root. The `workspace_root` value in [config.example.json](config.example.json) is a placeholder and cannot be used directly. For initial setup, run this complete single line: it preserves the example's other fields, selects an absolute directory under your home directory, creates it, and writes the Git-ignored `config.json`.
-
-```shell
-python -c "import json; from pathlib import Path; p = Path.home().joinpath('mkt-max-workspace').resolve(); p.mkdir(parents=True, exist_ok=True); c = json.loads(Path('config.example.json').read_text(encoding='utf-8-sig')); c['workspace_root'] = str(p); Path('config.json').write_text(json.dumps(c, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'); print(p)"
+```powershell
+if (!(Test-Path -LiteralPath config.json)) {
+    Copy-Item -LiteralPath config.example.json -Destination config.json
+}
+notepad config.json
 ```
-
-This single line works in PowerShell, Windows Command Prompt, and common POSIX shells. Running it again overwrites your personal `config.json`; retain or edit an existing configuration instead. You may choose another workspace, but `workspace_root` must be an absolute path. Keep real project material out of the public repository.
-
-### 3. Initialize and locate the resume packet
-
-These two commands are ready to run after configuration:
 
 ```shell
 python scripts/start_agent.py init --name "Demo workshop" --id demo-workshop --config config.json
-python scripts/start_agent.py resume --project demo-workshop --config config.json
+python scripts/start_agent.py resume --project demo-workshop --task "Research the audience and competing events" --config config.json
 ```
 
-`init` creates the project and its initial revision; it does not produce a plan. `resume` saves a task packet and checkpoint and returns JSON fields such as `current_revision`, `context_path`, and `context_json_path`. The Agent must then read the indicated files and perform the work. Despite its name, `start_agent.py` does not start an Agent.
+Then ask your agent, for example, *“Use this checkout’s SKILL.md and resume demo-workshop. I’m considering an after-work workshop. Find two ways people already solve this problem and bring me a first-hand observation or a source for each. I’ll write the opening.”* Once a direction is chosen, a second request could be *“Keep my opening verbatim. Write the participant experience and staffing chapters for internal review.”*
 
-Project files live at `<workspace_root>/projects/demo-workshop/`. To include a real brief during initial creation, add `--brief "C:/your-path/brief.md"` to `init`. Original sources and the brief default to the `master` scope. Role fields filter task packets; they are not filesystem permissions.
+### Persistence and reader copies
 
-## Everyday CLI: resume, write back, roll back, and assemble
+`init` creates a project and initial revision. `resume` prepares a task packet for the agent to read. The runtime stores source material, decisions, handovers, modules and revision history under the configured workspace. The agent submits changes with `writeback.py`, identifying the base revision and operation. The project hub (`项目中枢.md`) provides navigation back to the records and actual chapter text. The scripts manage files and revisions. Research and writing are done by the agent with the tools available in its host. [Runtime commands and payloads](references/runtime-protocol.md) · [Context and recovery](references/context-and-recovery.md)
 
-See the [runtime protocol](references/runtime-protocol.md) for complete payload fields and response contracts. JSON responses report status, current revision, file locations, warnings, and next actions. Exit code 0 means the mechanical operation succeeded or the identical request was already applied.
-
-### Resume a task
+For a new collaborative project, the default assembly is the internal working copy. It can include incomplete work, attachments, questions and blockers. The client view assembles current, reviewable chapters explicitly designated for the client, subject to role, dependency and blocker checks. It exports Markdown and a manifest used to identify the exact version shown. A person still checks the contents for sensitive wording and authorizes distribution. Older projects without a recorded workflow mode retain their historical assembly behavior. [Reader delivery](references/reader-delivery.md)
 
 ```shell
-python scripts/start_agent.py resume --project demo-workshop --task "Review the current brief and identify missing inputs" --page 1 --page-size 40 --config config.json
+python scripts/assemble.py --project demo-workshop --view editor --config config.json
+python scripts/assemble.py --project demo-workshop --view client --config config.json
 ```
 
-Add `--module` after the module has been registered. Packets default to 40 entries per page, with a maximum of 100. Read further pages and required originals according to the returned coverage information. `--task` does not perform semantic search or guarantee that all relevant material has been located.
+## Validation and known issues
 
-Repeat `--required-ref` when this task needs objects outside its currently registered dependencies. For example, `--required-ref source:YOUR_REGISTERED_SOURCE_ID` **only applies when that source ID actually exists in this project**; replace it with a real ID. Explicit required references do not persist dependencies. If the content uses them, register the relationship through `source_ids` or `depends_on` during writeback.
+In the isolated development workspace, **76 runtime tests and 9 collaboration tests passed**. A simulated product roadshow also exercised a mid-project change. All six apparent bookings matched existing store appointments. For that batch the six slots were occupied and the incremental booking count was zero. The team reopened the funding decision, recommended retaining the store allocation and revised the budget and reception chapters. The superseded budget copy was blocked. The planner’s chosen blind-listening opening remained byte-for-byte identical for internal rehearsal. This was a simulated review with no actual spending decision or customer results. The test suite and trial workspace are development materials outside this package.
 
-### Save real sources and content
-
-Writeback types are `source`, `contract`, `handoff`, `module`, `change`, and `review`. Every JSON payload must use `file` to reference an existing, nonempty file. Each type has additional required fields; build payloads from the runtime protocol instead of editing authoritative snapshots directly.
-
-The following are **templates requiring replacement values**, not commands to run immediately after initialization:
-
-```shell
-python scripts/writeback.py source --project demo-workshop --base CURRENT_REVISION --operation-id register-source-001 --payload "C:/your-path/source-payload.json" --config config.json
-python scripts/writeback.py module --project demo-workshop --base CURRENT_REVISION --operation-id revise-module-001 --payload "C:/your-path/module-payload.json" --config config.json
-```
-
-Replace `CURRENT_REVISION` with the real revision returned by the latest `resume`, and supply an actual payload file. Modules must already exist in the contract, and production must meet the relevant handover conditions. Every successful submission creates a new revision; check the baseline again before the next submission. An `operation-id` identifies one request: the same ID and request can be retried idempotently; changed content needs a new ID.
-
-On a baseline conflict, the runtime retains a candidate. Read the current revision, compare and revise the content, then submit with a new operation ID. Merely changing `--base` does not replace that comparison. `reviewable` means ready for review, not approved, and requires manual checking against the known status problem below.
-
-### Restore historical content
-
-Read the rollback-report permission issue below first. This is also a template requiring real revision values:
-
-```shell
-python scripts/rollback.py --project demo-workshop --base CURRENT_REVISION --operation-id restore-content-001 --to ANCESTOR_REVISION --reason "Restore the reviewed content for comparison" --config config.json
-```
-
-`ANCESTOR_REVISION` must be a committed ancestor. Rollback creates a new revision, restores historical content and source references, retains current facts, current decisions, and all external events, and produces a difference report. It does not undo real messages, contracts, purchases, or events, or automatically reactivate historical approvals.
-
-### Assemble a deliverable and run supporting checks
-
-Run these after the project has eligible contracted modules and actual content:
-
-```shell
-python scripts/assemble.py --project demo-workshop --config config.json
-python scripts/cost_check.py --project demo-workshop --config config.json
-python scripts/repair.py --project demo-workshop --config config.json
-```
-
-By default, `assemble` combines `now` modules in contract order into `deliverables/<revision>/complete-plan.md` with an input-fingerprint manifest. Use `--modules` with real module IDs for a selection. Missing content, stale dependencies, or relevant blocking conditions prevent assembly. Assembly does not write missing content, assess its quality, or export `.docx` or `.pptx`.
-
-`cost_check` is a read-only structural and arithmetic check of registered costs; it does not verify quotations. `repair` rebuilds derived views such as the hub and catalogs and reports diagnostics. It does not repair corrupt authoritative history or forcibly unlock projects. Handle warnings, blockers, and unfinished work according to their actual causes.
-
-## Three example Agent requests
-
-Load the complete skill in the host first, or provide the Agent with the absolute path to your local `SKILL.md`. Project IDs must refer to initialized projects. Replace source locations, scope, and intended use with the actual brief.
-
-**Research and direction:**
-
-```text
-Use mkt-max-1 to resume demo-workshop with this repository's config.json.
-This is a workshop for first-time participants; use my Brief as the authority for its goals and inputs.
-Read the packet, Brief, and required originals. Check audience needs, content material, and key conditions.
-Research and compare choices, develop the strongest counterargument, and separate facts, proposals,
-and untested hypotheses with explicit confidence levels. Deliver a reviewable direction and stage
-handover, saving source locations, reading coverage, open questions, and production tasks.
-```
-
-**Complete content production:**
-
-```text
-Use mkt-max-1 to resume demo-workshop. Continue the current effective direction and contract.
-Read the stage handover and the original material actually used. Write complete content for modules
-needed now, including participant experiences, scenes, rules, all agreed copy, and handover files.
-Handle gaps according to the current intended use. Pause only finalization that depends on a
-substantive decision, and continue other authorized work. Save each part, cross-check shared facts
-and interfaces, then assemble Markdown and accurately list unfinished items.
-```
-
-**Focused revision:**
-
-```text
-Use mkt-max-1 to resume demo-workshop. I will provide a new event date and evidence of approval.
-Check the current revision and originals, record the change, and examine affected content,
-staffing, resources, costs, and copy. Revise the actual content and handover files while retaining
-unaffected valid work. Check stale markers and open questions, write back against the current
-baseline, and report changes, affected scope, and outstanding confirmations. Do not edit snapshots.
-```
-
-## File layout
-
-```text
-mkt-max-1/
-├── SKILL.md                 # Skill entry point and working protocol
-├── agents/openai.yaml       # Agent interface metadata
-├── references/              # 17 references, including runtime protocol and provenance
-├── scripts/
-│   ├── start_agent.py       # init / resume
-│   ├── writeback.py         # source / contract / handoff / module / change / review
-│   ├── rollback.py          # Restore content as a new revision
-│   ├── assemble.py          # Assemble actual Markdown content
-│   ├── cost_check.py        # Cost structure and arithmetic checks
-│   ├── repair.py            # Derived-view rebuilding and diagnostics
-│   └── hub_runtime.py       # Standard-library runtime implementation
-├── assets/readme-hero.png
-├── config.example.json      # Distributable example configuration
-├── config.json              # Personal configuration; created during setup and Git-ignored
-├── version.json
-├── LICENSE
-├── README.md
-└── README.en.md
-```
-
-Under the configured workspace, `projects/<project-id>/` holds `项目中枢.md`, `HEAD.json`, `revisions/`, `assets/`, `candidates/`, `work/`, `operations/`, and `deliverables/`. Originals, history, and candidates remain in the project; the public repository contains no real project material. Back up complete content, historical revisions, and your original inputs together.
-
-## Current status and known issues
-
-**1.1.0 is experimental. These three confirmed problems remain unresolved.** Checks and filtering described in the runtime protocol are not a guarantee that the current implementation is defect-free.
-
-| Known issue | Current effect and usage boundary |
+| Known defect in rc.3 | Practical handling |
 |---|---|
-| Rollback difference reports do not inherit permissions for private values | A `public` task packet can expose a location for the full report, which may contain private values. Use full rollback reports only in the master-controlled environment; inspect packets after rollback before distributing them to other roles. Packet filtering is not an operating-system ACL. |
-| Module submission checks old `unresolved` entries before storing the new ones | A submission can leave `reviewable` status alongside a newly added `blocking` question. Manually check the content status and all new unresolved entries after submission; the status field does not establish readiness for finalization. |
-| Units included in a `module.units` submission can be incorrectly marked `stale` | Newly saved units and downstream work may be blocked. Inspect the actual objects, evidence, and effects. Do not bypass this by changing version numbers or directly editing authoritative snapshots. |
+| A public-role task packet after rollback can reveal the path to a full comparison report containing private values. | Keep the report and packet with a trusted operator. Inspect them before sharing. Role filtering operates at the application level. |
+| A module update can store a new blocking question alongside a `reviewable` status. | Read the updated blockers and status together. Client assembly checks current blockers separately. |
+| A newly declared unit in `module.units` can immediately be marked `stale`. | Check the affected unit and downstream handovers against their evidence before resuming work. |
 
-There are also two explicit validation limits:
-
-- The blind-draft validator does not sufficiently check the one-to-one correspondence between `source` and `anonymous` drafts. Inspection of the current 48 drafts found no mismatches, but this does not establish that the validator covers this failure mode.
-- First-packet token counts exclude later navigation: the recorded first-packet comparison is 7,304 versus 6,832, while the complete two-page count is 7,659. Different reading scopes cannot support a direct benefit comparison; no token-saving claim is made from these numbers.
-
-Synthetic cases and model reviews do not replace handover to real professionals, actual audience experience, or market validation. The historical 76-test result does not certify the current release as defect-free. Structural checks, content review, permission checks, and verification of real execution remain separate tasks.
-
-## Provenance, license, and feedback
-
-The method draws on this workspace's ceyuan2, ceyuan3, and ceyuan4, reorganized into requirements-driven research, conditional reasoning, content production, and delivery. File navigation, task packets, and revision mechanisms draw on fixed versions of Agent Skills, Deep Agents, OpenSpec, GSD Core, and Aider. See [provenance](references/provenance.md) for the adoption boundaries and pinned links. The runtime is independently implemented with Python's standard library and does not require those frameworks.
-
-Code and documentation are released under the [MIT License](LICENSE). Preserve the license and copyright notices. Using this package does not automatically grant redistribution rights to third-party material or user project originals.
-
-Report feedback through [GitHub Issues](https://github.com/DONGaOtang/mkt-max-/issues). Include the version, a minimal reproduction command, expected and actual behavior, and sample inputs with private material removed. Do not upload a complete private project or a rollback report containing private values.
+Code and documentation use the MIT License. For bug reports, include the version, a minimal reproduction, and the expected and observed behavior, using sample inputs that can be shared. [License](LICENSE) · [GitHub Issues](https://github.com/DONGaOtang/mkt-max-/issues)
