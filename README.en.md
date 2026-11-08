@@ -6,7 +6,7 @@
 
 MKT Max 1 helps a planner develop an event idea and turn the chosen direction into a readable proposal. In the first stage, **you are the lead author**. The assistant researches the market, investigates creative leads and helps you test alternatives. In the second stage, **you commission chapters and the assistant writes them** using your original material and decisions. A local Python runtime keeps the work available across conversations.
 
-**Experimental release candidate 1.2.0-rc.4.** The skill and its working references are primarily in Chinese. The release has three known runtime defects, including a privacy issue after rollback. [Version record](version.json) · [Known issues](#validation-and-known-issues)
+**Experimental release candidate 1.2.0-rc.5.** Human handbacks save the shown files, original material, research, choices and pending work before waiting. The skill and its working references are primarily in Chinese. Three previously documented runtime defects remain, including a privacy issue after rollback. [Version record](version.json) · [Known issues](#validation-and-known-issues)
 
 ## How a project moves through the two stages
 
@@ -91,9 +91,17 @@ python scripts/assemble.py --project demo-workshop --view editor --config config
 python scripts/assemble.py --project demo-workshop --view client --config config.json
 ```
 
+### Save before every human handback
+
+Before pausing at an assignment, research, direction, writing, chapter, delivery or changed-condition decision, the assistant saves the actual material shown and five categories: **planner originals, research, creative choices and rejected alternatives, pending questions, and the next action**. Each category contains real files or existing references, or an explicit explanation that nothing was added. The assistant maintains this record.
+
+`start_agent.py pause` and `writeback.py pause` publish the files and index in one revision, then generate and read back the recovery packet. New human confirmations reference a saved checkpoint from the matching round and node, with unchanged displayed inputs. Saving grants no writing permission. After a crash, recover the files and the current human boundary before continuing. A committed revision with a failed derived packet is repaired rather than submitted twice. [Node persistence](references/node-persistence.md) · [Payloads](references/runtime-protocol.md)
+
+The optional `context_guard.py` binds an explicit session and project, reads a delayed last-request usage signal, and provides a Codex pre-compaction save adapter. It is not an exact live context meter. Native hooks require actual host review and trust; a sample configuration or a manually simulated hook is not evidence that a native hook ran. Text that was never written to a file cannot be recovered by this adapter. [Context and limitations](references/context-and-recovery.md) · [Hook example](hooks.example.json)
+
 ## Restart an existing project
 
-Older projects remain available for reading and historical reference. In rc.4, a renewed commission or a request to start over uses `reopen` to create a new discussion round in the research phase. Original files, prior versions, actual business facts and external events remain available. Earlier direction and writing permissions are reviewed for carryover into the current round. A task description saying “return to stage one” changes the task text alone. [Round, restart and review protocol](references/runtime-protocol.md)
+Older projects remain available for reading and historical reference. A renewed commission or a request to start over uses `reopen` to create a new discussion round in the research phase. Original files, prior versions, actual business facts and external events remain available. Earlier direction and writing permissions are reviewed for carryover into the current round. A task description saying “return to stage one” changes the task text alone. [Round, restart and review protocol](references/runtime-protocol.md)
 
 The assistant first saves and registers the planner’s actual restart request as a source. In this example, replace `CURRENT_REV` with the revision returned by `resume`, `RestartRequest` with that registered source ID, and the file path with the saved request.
 
@@ -108,6 +116,10 @@ If the planner explicitly retains a module, the command can include its actual r
 The existing **rc.3** development record reports **76 runtime tests and 9 collaboration tests passed**. Its simulated product roadshow also exercised a mid-project change. All six apparent bookings matched existing store appointments. For that batch the six slots were occupied and the incremental booking count was zero. The team reopened the funding decision, recommended retaining the store allocation and revised the budget and reception chapters. The superseded budget copy was blocked. The planner’s chosen blind-listening opening remained byte-for-byte identical for internal rehearsal. This was a simulated review with no actual spending decision or customer results. The test suite and trial workspace are development materials outside this package.
 
 In an isolated development workspace, rc.4 passed **99/99 tests with no skips**, comprising 76 runtime, 9 collaboration and 14 human-checkpoint tests. These cover genuine older-format project reopening, research handback, writing scope, chapter and batch review, current text fingerprints, cross-round rollback and mixed-scope permissions. Runtime and test-file hashes stayed unchanged across all four execution groups. An independent model restart sample returned the scope and paused for a human response. The development records cover synthetic program and model behavior.
+
+The **rc.5** frozen-source run passed **148/148 tests with no failures or skips**: the original 99, 18 node-persistence tests and 31 context-adapter tests. All four process shards retained identical source and test hashes. Real child processes were killed before and after HEAD publication and recovered in fresh processes; saved originals, the shown text and idempotency were checked byte-for-byte. An independent cold reader recovered the original wording, research limits, rejected alternative, pending question and next step while preserving the research handback boundary.
+
+Four independently reproduced defects in conflict recovery, rebinding, lost-receipt replay and inherited review materials were fixed and independently verified. Reading a real Codex session's last-request usage was also verified. These results do not establish native-hook trust, actual invocation or active-chat hot reload, which require separate host evidence. Development test data is outside this skill package.
 
 | Known issue carried into the current candidate | Practical handling |
 |---|---|

@@ -26,6 +26,8 @@ SCHEMA_VERSION = 1
 FINGERPRINT_VERSION = 2
 WORKFLOW_VERSION = 2
 HUMAN_GATES = {"brief", "research", "direction", "writing", "chapter_review", "delivery"}
+PAUSE_NODES = HUMAN_GATES | {"change", "context_save"}
+MATERIAL_CATEGORIES = {"original", "research", "creative", "pending", "next"}
 APPLICABILITY = {"now", "later", "not_needed", "unknown"}
 CONTENT_STATUS = {"outline", "draft", "reviewable", "needs_review", "blocked", "archived"}
 COLLECTIONS = {
@@ -636,7 +638,7 @@ class HubRuntime:
         return result
 
     def _validate_payload(self, kind: str, payload: Any) -> dict:
-        if not isinstance(kind, str) or kind not in {"source", "contract", "handoff", "module", "change", "review", "reopen"}:
+        if not isinstance(kind, str) or kind not in {"source", "contract", "handoff", "module", "change", "review", "reopen", "pause"}:
             raise HubError(f"Unknown submit kind: {kind}")
         if not isinstance(payload, dict):
             raise HubError("Payload must be a JSON object")
@@ -646,6 +648,7 @@ class HubRuntime:
             raise HubError(f"Payload must contain finite JSON values: {exc}") from exc
         _require(data, ["file"])
         required = {
+            "pause": ["node", "authorized_scope", "refs"],
             "reopen": ["reason", "source_ids", "retained_refs"],
             "source": ["source_id", "title", "producer", "locator", "published_at", "occurred_at", "accessed_at", "version", "access_status", "read_scope", "supports", "limitations"],
             "contract": ["requirements", "author_role", "recipient_role", "document_use", "modules"],
@@ -660,7 +663,7 @@ class HubRuntime:
                 _list(data[field], field)
                 for ident in data[field]:
                     _id(ident, field)
-        for field in ("depends_on", "impact", "targets", "remove_dependencies", "retained_refs"):
+        for field in ("depends_on", "impact", "targets", "remove_dependencies", "retained_refs", "refs"):
             if field in data:
                 data[field] = _refs(data[field], field)
         if "allowed_roles" in data:
@@ -681,6 +684,20 @@ class HubRuntime:
                 if "allowed_roles" in artifact:
                     artifact["allowed_roles"] = _roles(artifact["allowed_roles"])
                 inputs.append(self._input(artifact["file"], text=True))
+        if kind == "pause":
+            _enum(payload["node"], PAUSE_NODES, "pause node")
+            for material in _list(payload.get("materials", []), "materials"):
+                if not isinstance(material, dict):
+                    raise HubError("Materials must be classified objects")
+                for file in _list(material.get("files", []), "material files"):
+                    inputs.append(self._input(file))
+            for extra in _list(payload.get("extra_files", []), "extra_files"):
+                if not isinstance(extra, dict):
+                    raise HubError("Extra files need category/title/file")
+                _require(extra, ["category", "title", "file"])
+                _enum(extra["category"], MATERIAL_CATEGORIES, "extra file category")
+                _text(extra["title"], "extra file title")
+                inputs.append(self._input(extra["file"]))
         return inputs
 
     def _candidate(self, project: Path, operation_id: str, request_hash: str,
@@ -1121,6 +1138,162 @@ class HubRuntime:
             "file": str(file), "source_ids": source_ids, "reason": reason,
             "retained_refs": [] if retained_refs is None else retained_refs})
 
+    def pause(self, project: str | Path, base: str, operation_id: str, payload: dict) -> dict:
+        return self.submit(project, base, operation_id, "pause", payload)
+
+    def _checkpoint_record(self, snapshot: Path, state: dict, checkpoint_id: str | None) -> dict | None:
+        artifact = state["artifacts"].get(checkpoint_id)
+        if not artifact or artifact.get("kind") != "human_checkpoint" or artifact.get("storage") != "snapshot":
+            return None
+        raw = (snapshot / artifact["path"]).read_bytes()
+        if _hash(raw) != artifact["sha256"]:
+            raise HubError("Published checkpoint bytes do not match their record", 4)
+        return _json_loads(raw)
+
+    def _checkpoint_current(self, state: dict, record: dict, fingerprints: dict) -> bool:
+        artifact = state["artifacts"].get(record.get("checkpoint_id"), {})
+        return (artifact.get("kind") == "human_checkpoint"
+            and record.get("saved_revision") == artifact.get("created_revision")
+            and record.get("discussion_round") == state.get("discussion_round")
+            and not artifact.get("stale")
+            and all(fingerprints.get(ref) == value for ref, value in record.get("input_fingerprints", {}).items()))
+
+    def _apply_pause(self, project: Path, stage: Path, state: dict, payload: dict,
+                     inputs: list[dict], operation_id: str) -> set[str]:
+        node = _enum(payload["node"], PAUSE_NODES, "pause node")
+        _text(payload["authorized_scope"], "authorized_scope")
+        reuse = payload.get("reuse_materials", False)
+        if not isinstance(reuse, bool) or (reuse and node != "context_save"):
+            raise HubError("reuse_materials is only available for context_save")
+        prior = state.get("pause_checkpoint") or {}
+        awaiting = (self._checkpoint_record(stage, state, state.get("pending_checkpoint_id"))
+                    if node == "context_save" else None)
+        pending_default = (awaiting or prior).get("pending_questions", []) if state.get("pending_checkpoint_id") else []
+        pending = payload.get("pending_questions", pending_default if reuse else None)
+        pending = _list(pending, "pending_questions")
+        for question in pending:
+            _text(question, "pending question")
+        if node != "context_save" and not pending:
+            raise HubError("人审节点须保存实际待答复问题。", 7)
+        next_default = (awaiting or prior).get("next_action") if state.get("pending_checkpoint_id") else self._next_discussion(state)
+        next_action = payload.get("next_action", next_default if reuse else None)
+        _text(next_action, "next_action")
+        if len(next_action) > 2000:
+            raise HubError("next_action exceeds the resume task limit of 2000 characters")
+        roles = _roles(payload.get("allowed_roles", ["master"]))
+        materials = {}
+        if reuse:
+            for previous in prior.get("materials", []):
+                refs = list(dict.fromkeys(previous.get("refs", []) + ["artifact:" + ident for ident in previous.get("artifact_ids", [])]))
+                materials[previous["category"]] = {"category": previous["category"], "title": previous["title"],
+                    "status": "referenced" if refs else "none", "refs": refs, "files": [],
+                    "note": "复用上次已经保存的分类原件。" if refs else previous.get("note", "本类尚无新增材料。")}
+            for category in MATERIAL_CATEGORIES:
+                materials.setdefault(category, {"category": category, "title": category, "status": "none",
+                    "refs": [], "files": [], "note": "尚无前序分类记录；已有项目资料仍由原索引保存。"})
+        supplied = _list(payload.get("materials", []), "materials")
+        seen = set()
+        incoming = []
+        for raw in supplied:
+            _require(raw, ["category", "title", "status", "refs", "files"])
+            category = _enum(raw["category"], MATERIAL_CATEGORIES, "material category")
+            if category in seen:
+                raise HubError("Each material category must occur once")
+            seen.add(category)
+            _text(raw["title"], "material title")
+            _enum(raw["status"], {"new", "referenced", "none"}, "material status")
+            refs = _refs(raw["refs"], "material refs")
+            files = _list(raw["files"], "material files")
+            if raw["status"] == "none":
+                _text(raw.get("note"), "reason for no new material")
+                if refs or files:
+                    raise HubError("A none category cannot claim supplied files or refs")
+            elif raw["status"] == "referenced" and not refs:
+                raise HubError("Referenced materials require existing refs")
+            elif raw["status"] == "new" and not refs and not files:
+                raise HubError("New materials require actual files or existing refs")
+            item = copy.deepcopy(raw)
+            if reuse:
+                item["refs"] = list(dict.fromkeys(materials[category]["refs"] + refs))
+            materials[category] = item
+            incoming.extend((category, raw["title"]) for file in files)
+        if set(materials) != MATERIAL_CATEGORIES:
+            raise HubError("节点收尾须逐项说明 original/research/creative/pending/next 五类材料。", 7)
+        for extra in payload.get("extra_files", []):
+            incoming.append((extra["category"], extra["title"]))
+        if len(incoming) != len(inputs) - 1:
+            raise HubError("Saved material inputs do not match their classification", 4)
+        refs = list(payload["refs"])
+        if reuse:
+            # The displayed note and top-level inputs are independent of the five
+            # classifications. Reusing only classifications loses the actual
+            # pending proposal when those categories legitimately have no files.
+            refs.extend(prior.get("refs", []))
+            if prior.get("note_artifact_id"):
+                refs.append("artifact:" + prior["note_artifact_id"])
+        if awaiting:
+            # Preserve the original human checkpoint, rather than blessing its
+            # old display with fingerprints recalculated at autosave time.
+            refs.extend(awaiting.get("refs", []))
+            refs.append("artifact:" + awaiting["checkpoint_id"])
+            refs.append("artifact:" + awaiting["note_artifact_id"])
+        for material in materials.values():
+            refs.extend(material["refs"])
+        refs = list(dict.fromkeys(refs))
+        for ref in refs:
+            self._object(state, ref)
+        closure = self._closure(state, refs) if refs else []
+        fingerprints = self._fingerprints(state)
+        inputs_bound = {ref: fingerprints[ref] for ref in closure}
+        checkpoint_id = _generated("pause-", operation_id)
+        note_id = _generated("pause-note-", operation_id)
+        changed = {"artifact:" + note_id, "artifact:" + checkpoint_id}
+        self._artifact(stage, state, note_id, "checkpoint_note", "", f"checkpoints/{operation_id}/note.md",
+                       inputs[0], allowed_roles=roles, depends_on=refs)
+        captured_files = []
+        for index, ((category, title), item) in enumerate(zip(incoming, inputs[1:])):
+            suffix = Path(item["name"]).suffix
+            if not re.fullmatch(r"\.[A-Za-z0-9]{1,10}", suffix):
+                suffix = ".bin"
+            artifact_id = _generated("pause-file-", operation_id + "-" + str(index))
+            self._artifact(stage, state, artifact_id, "checkpoint_material", "",
+                           f"checkpoints/{operation_id}/files/{index:03d}{suffix}", item,
+                           allowed_roles=roles, category=category, title=title, original_name=item["name"],
+                           depends_on=materials[category]["refs"])
+            materials[category].setdefault("artifact_ids", []).append(artifact_id)
+            materials[category]["status"] = "new"
+            captured_files.append({"original_path": item["path"], "sha256": item["sha256"],
+                                   "size": item["size"], "category": category, "artifact_id": artifact_id})
+            changed.add("artifact:" + artifact_id)
+        for material in materials.values():
+            material.pop("files", None)
+            material.setdefault("artifact_ids", [])
+            if material["status"] == "none" and material["refs"]:
+                material["status"] = "referenced"
+        metadata = payload.get("metadata", {})
+        telemetry = payload.get("telemetry", {"status": "unknown"})
+        if not isinstance(metadata, dict) or not isinstance(telemetry, dict):
+            raise HubError("metadata and telemetry must be JSON objects")
+        record = {"checkpoint_version": 1, "checkpoint_id": checkpoint_id, "operation_id": operation_id,
+            "saved_revision": state["revision"], "discussion_round": state.get("discussion_round"),
+            "node": node, "pending_questions": pending, "next_action": next_action,
+            "authorized_scope": payload["authorized_scope"], "refs": refs,
+            "input_fingerprints": inputs_bound, "materials": [materials[key] for key in sorted(materials)],
+            "captured_files": captured_files,
+            "note_artifact_id": note_id, "metadata": metadata, "telemetry": telemetry,
+            "awaiting_checkpoint_id": checkpoint_id if node != "context_save" else state.get("pending_checkpoint_id"),
+            "saved_at": _now()}
+        body = _canonical(record)
+        file_refs = ["artifact:" + ident for material in materials.values() for ident in material["artifact_ids"]]
+        self._artifact(stage, state, checkpoint_id, "human_checkpoint", "", f"checkpoints/{operation_id}/checkpoint.json",
+                       {"data": body, "sha256": _hash(body), "size": len(body)}, allowed_roles=roles,
+                       depends_on=list(dict.fromkeys(refs + file_refs + ["artifact:" + note_id])),
+                       checkpoint_node=node, discussion_round=state.get("discussion_round"))
+        state["pause_checkpoint"] = record
+        if node != "context_save":
+            state["pending_checkpoint_id"] = checkpoint_id
+        return changed
+
     def _apply_reopen(self, project: Path, stage: Path, state: dict, payload: dict,
                       inputs: list[dict], operation_id: str) -> set[str]:
         _text(payload["reason"], "reopen reason")
@@ -1134,7 +1307,7 @@ class HubRuntime:
         state.update(workflow_mode="collaborative", workflow_version=WORKFLOW_VERSION,
                      discussion_round="round-" + uuid.uuid4().hex[:12], phase="research",
                      round_started_revision=state["revision"], previous_discussion_round=previous_round,
-                     retained_refs=list(payload["retained_refs"]))
+                     retained_refs=list(payload["retained_refs"]), pending_checkpoint_id=None)
         if state.get("contract"):
             state["contract"]["stale"] = True
             state["contract"]["stale_reasons"] = ["本轮重开后须核对委托与继承范围"]
@@ -1359,6 +1532,45 @@ class HubRuntime:
             raise HubError("章审须绑定所读正文的 SHA256，并核对当前正文和条件；请先交修订稿。", 7)
         payload["depends_on"] = list(dict.fromkeys(payload.get("depends_on", []) + ["module:" + module_id]))
         return writing
+
+    def _require_checkpoint(self, stage: Path, state: dict, payload: dict, node: str) -> None:
+        checkpoint_id = payload.get("checkpoint_id")
+        artifact = state["artifacts"].get(checkpoint_id) if isinstance(checkpoint_id, str) else None
+        if not artifact or artifact.get("kind") != "human_checkpoint":
+            raise HubError("先用 pause 保存本节点实际展示材料和待确认事项，再登记人的答复。", 7)
+        if artifact.get("storage") != "snapshot" or artifact.get("stale"):
+            raise HubError("节点沉淀已失效，请回交当前材料并重新保存节点。", 7)
+        path = self._write_path(stage / artifact["path"])
+        raw = path.read_bytes()
+        if _hash(raw) != artifact["sha256"]:
+            raise HubError("Published checkpoint bytes do not match their record", 4)
+        checkpoint = _json_loads(raw)
+        if (checkpoint.get("checkpoint_id") != checkpoint_id or checkpoint.get("node") != node
+                or checkpoint.get("discussion_round") != state.get("discussion_round")
+                or checkpoint.get("saved_revision") != artifact.get("created_revision")):
+            raise HubError("人工答复须引用同轮、同节点已发布的展示材料。", 7)
+        current = self._fingerprints(state)
+        if any(current.get(ref) != fingerprint for ref, fingerprint in checkpoint["input_fingerprints"].items()):
+            raise HubError("节点展示材料已经变化，请先交当前版本，再保存并核对实际答复。", 7)
+        value = payload["new_value"]
+        required = set()
+        if node == "brief":
+            required.add("contract:current")
+        if isinstance(value, dict):
+            if node == "research":
+                required.update(value.get("material_refs", []))
+            elif node == "writing":
+                required.add("handoff:current")
+                required.update("module:" + ident for ident in value.get("modules", []))
+            elif node == "chapter_review":
+                required.add("module:" + value["module_id"])
+            elif node == "delivery":
+                required.update("module:" + ident for ident in value.get("accepted_modules", []))
+                required.update("module:" + section["module_id"] for section in value.get("accepted_sections", []))
+        if not required.issubset(checkpoint["input_fingerprints"]):
+            raise HubError("节点沉淀没有覆盖本次答复采用的实际材料和章节范围。", 7)
+        if state.get("pending_checkpoint_id") == checkpoint_id:
+            state["pending_checkpoint_id"] = None
 
     def _refresh_phase(self, state: dict) -> None:
         if state.get("workflow_version") == WORKFLOW_VERSION:
@@ -1730,6 +1942,8 @@ class HubRuntime:
                             replaced_reviews.add("decision:" + other_id)
                 if gate == "delivery":
                     self._verify_delivery_decision(project, state, payload, chain)
+            node = value.get("gate") if isinstance(value, dict) else None
+            self._require_checkpoint(stage, state, payload, node if node in HUMAN_GATES else "change")
         if "dynamic" in payload and not isinstance(payload["dynamic"], bool):
             raise HubError("dynamic must be boolean")
         if kind == "cost":
@@ -1806,6 +2020,40 @@ class HubRuntime:
         return {f"review:{ident}", f"artifact:{artifact_id}"}
 
     def submit(self, project: str | Path, base: str, operation_id: str, kind: str, payload: dict) -> dict:
+        result = self._submit(project, base, operation_id, kind, payload)
+        if kind != "pause":
+            return result
+        return self._complete_pause(project, operation_id, result)
+
+    def _complete_pause(self, project: str | Path, operation_id: str, result: dict) -> dict:
+        project_path = self._project(project)
+        saved_revision = result.get("applied_revision", result["current_revision"])
+        checkpoint_id = _generated("pause-", operation_id)
+        checkpoint_path = self._write_path(project_path / "revisions" / saved_revision / "checkpoints" / operation_id / "checkpoint.json")
+        result.update(committed=True, saved_revision=saved_revision, saved_checkpoint_id=checkpoint_id,
+                      saved_checkpoint_path=str(checkpoint_path), recovery_ready=False,
+                      recovery_context_path=None, recovery_context_json_path=None)
+        try:
+            record = self._read_json(checkpoint_path)
+            if record.get("checkpoint_id") != checkpoint_id or record.get("saved_revision") != saved_revision:
+                raise HubError("Published checkpoint identity mismatch", 4)
+            result["captured_files"] = record.get("captured_files", [])
+            recovery = self.resume(project, required_refs=["artifact:" + checkpoint_id])
+            context = self._read_json(Path(recovery["context_json_path"]))
+            if (recovery["status"] != "success" or context["revision"] != recovery["current_revision"]
+                    or not Path(recovery["context_path"]).is_file()):
+                raise HubError("Recovery packet could not be verified", 6)
+            result.update(current_revision=recovery["current_revision"], recovery_ready=True,
+                          recovery_context_path=recovery["context_path"],
+                          recovery_context_json_path=recovery["context_json_path"],
+                          context_path=recovery["context_path"], checkpoint_path=recovery["context_json_path"],
+                          next_actions=recovery["next_actions"])
+        except Exception as exc:
+            result["warnings"].append(f"Checkpoint committed; recovery entry needs repair: {type(exc).__name__}: {exc}")
+            result["next_actions"] = ["原件和节点修订已发布；修复接续入口并核验后再报告可靠停妥，不重复保存事务。"]
+        return result
+
+    def _submit(self, project: str | Path, base: str, operation_id: str, kind: str, payload: dict) -> dict:
         project_path = self._project(project)
         _id(base, "base revision")
         _id(operation_id, "operation ID")
@@ -1861,7 +2109,7 @@ class HubRuntime:
                 # downstream owners have already been invalidated as appropriate.
                 if kind == "module":
                     fresh_refs = changed
-                elif kind in {"source", "change", "review", "handoff", "reopen"}:
+                elif kind in {"source", "change", "review", "handoff", "reopen", "pause"}:
                     fresh_refs = changed
                 else:
                     fresh_refs = {"contract:current", "artifact:contract-current"}
@@ -1909,6 +2157,25 @@ class HubRuntime:
             head, chain = self._chain(project_path)
             state = chain[0]["state"]
             visible = self._visible_refs(state, role)
+            saved_checkpoint = state.get("pause_checkpoint") or {}
+            checkpoint_ref = "artifact:" + saved_checkpoint.get("checkpoint_id", "")
+            checkpoint_visible = bool(saved_checkpoint) and checkpoint_ref in visible
+            checkpoint_current = False
+            pending_review = None
+            if checkpoint_visible:
+                current_fingerprints = self._fingerprints(state)
+                checkpoint_current = self._checkpoint_current(state, saved_checkpoint, current_fingerprints)
+                pending_id = state.get("pending_checkpoint_id")
+                if (pending_id and saved_checkpoint.get("awaiting_checkpoint_id") == pending_id
+                        and "artifact:" + pending_id in visible):
+                    awaiting = self._checkpoint_record(project_path / "revisions" / state["revision"], state, pending_id)
+                    if awaiting:
+                        awaiting_current = (awaiting.get("node") != "context_save"
+                            and self._checkpoint_current(state, awaiting, current_fingerprints))
+                        pending_review = {key: awaiting[key] for key in ("checkpoint_id", "saved_revision", "node",
+                            "authorized_scope", "pending_questions", "next_action", "note_artifact_id")}
+                        pending_review["current"] = awaiting_current
+                        checkpoint_current = checkpoint_current and awaiting_current
             if module_id is not None:
                 _id(module_id, "module ID")
                 if module_id not in state["modules"]:
@@ -1916,6 +2183,8 @@ class HubRuntime:
                 roots = [f"module:{module_id}"]
             else:
                 roots = ["handoff:current"] if state.get("handoff") else []
+            if checkpoint_visible and (module_id is None or "module:" + module_id in saved_checkpoint["input_fingerprints"]):
+                roots.append(checkpoint_ref)
             for ref in requested_refs:
                 self._object(state, ref)
             roots = list(dict.fromkeys(roots + requested_refs))
@@ -2032,10 +2301,28 @@ class HubRuntime:
                 "fingerprints": {row["ref"]: row["fingerprint"] for row in read_page},
                 "module": {key: current_module[key] for key in ("module_id", "applicability", "content_status", "stale") if key in current_module} if current_module else None,
                 "next_actions": ["Read required original files and full exceptions; record actual reading separately", "Use current revision as base; preserve a candidate before writeback"]}
+            packet["pause_checkpoint"] = None
+            if checkpoint_visible:
+                checkpoint_preview, truncated = _preview(saved_checkpoint)
+                packet["pause_checkpoint"] = {"checkpoint_id": saved_checkpoint["checkpoint_id"],
+                    "saved_revision": saved_checkpoint["saved_revision"], "node": saved_checkpoint["node"],
+                    "current": checkpoint_current,
+                    "awaiting_reply": bool(pending_review) and checkpoint_current,
+                    "pending_review": pending_review,
+                    "index_path": str(self._artifact_path(project_path, state["revision"], state["artifacts"][saved_checkpoint["checkpoint_id"]])),
+                    "preview": checkpoint_preview, "truncated": truncated}
             if role == "master":
                 packet["next_actions"].insert(0, self._next_discussion(state))
                 if not task and not current_module:
                     packet["task"] = packet["next_actions"][0]
+                if checkpoint_visible and checkpoint_current and packet["pause_checkpoint"]["awaiting_reply"]:
+                    packet["next_actions"].insert(0, "先回读已保存节点的原稿、研究、创意取舍与待答复原话，等待实际回复后按范围接续。")
+                    if not task and not current_module:
+                        packet["task"] = saved_checkpoint["next_action"]
+                elif pending_review and not checkpoint_current:
+                    packet["next_actions"].insert(0, "原材料已变，先回读保留的原待审问题与展示正文，回交新版并重新保存节点，再核对人的实际答复。")
+                    if not task and not current_module:
+                        packet["task"] = packet["next_actions"][0]
             # Catalog is a complete persisted index; stdout remains paged.
             self._write_json(catalog_path, {"project_id": project_path.name,
                 "revision": state["revision"], "fingerprint_version": FINGERPRINT_VERSION,
@@ -2055,6 +2342,9 @@ class HubRuntime:
                      self._markdown_link("完整目录（只证明清单）", Path(packet["catalog_path"])),
                      self._markdown_link("本包机器JSON及分页信息", json_path),
                      self._markdown_link("完整当前指纹", Path(packet["fingerprints_path"])), "", "## 必读原文/当前依赖", ""]
+            if checkpoint_visible:
+                lines += [self._markdown_link("节点沉淀分类索引及原稿入口", Path(packet["pause_checkpoint"]["index_path"])),
+                          f"保存节点={saved_checkpoint['node']}；当前材料仍适用={checkpoint_current}；等待答复={packet['pause_checkpoint']['awaiting_reply']}", ""]
             for row in read_page:
                 paths = ([row["path"]] if row.get("path") else row.get("artifact_paths", []))
                 links = "; ".join(self._markdown_link("原件/正文", Path(p)) for p in paths[:5])
@@ -2490,8 +2780,13 @@ def cli_main(entry: str, argv: list[str] | None = None) -> int:
             reopen.add_argument("--source-id", dest="source_ids", action="append", required=True)
             reopen.add_argument("--reason", required=True)
             reopen.add_argument("--retain-ref", dest="retained_refs", action="append")
+            pause = commands.add_parser("pause")
+            pause.add_argument("--project", required=True)
+            pause.add_argument("--base", required=True)
+            pause.add_argument("--operation-id", required=True)
+            pause.add_argument("--payload", required=True)
         elif entry == "writeback":
-            parser.add_argument("kind", choices=["source", "contract", "handoff", "module", "change", "review", "reopen"])
+            parser.add_argument("kind", choices=["source", "contract", "handoff", "module", "change", "review", "reopen", "pause"])
             parser.add_argument("--project", required=True)
             parser.add_argument("--base", required=True)
             parser.add_argument("--operation-id", required=True)
@@ -2511,10 +2806,8 @@ def cli_main(entry: str, argv: list[str] | None = None) -> int:
             raise HubError("Unknown CLI entry")
         arguments = vars(parser.parse_args(cleaned))
         runtime = HubRuntime(load_config(config)["workspace_root"])
-        if entry == "start":
-            command = arguments.pop("command")
-            response = getattr(runtime, command)(**arguments)
-        elif entry == "writeback":
+        command = arguments.pop("command") if entry == "start" else None
+        if entry == "writeback" or (entry == "start" and command == "pause"):
             payload_path = Path(arguments.pop("payload"))
             HubRuntime._reject_traversal(payload_path)
             HubRuntime._reject_links(payload_path)
@@ -2522,7 +2815,9 @@ def cli_main(entry: str, argv: list[str] | None = None) -> int:
                 payload = _json_loads(payload_path.read_text(encoding="utf-8-sig"))
             except (OSError, UnicodeError, ValueError) as exc:
                 raise HubError(f"Cannot read JSON payload: {exc}", 2) from exc
-            response = runtime.submit(payload=payload, **arguments)
+            response = runtime.pause(payload=payload, **arguments) if entry == "start" else runtime.submit(payload=payload, **arguments)
+        elif entry == "start":
+            response = getattr(runtime, command)(**arguments)
         else:
             response = getattr(runtime, entry)(**arguments)
         if entry == "start" and command == "resume":
@@ -2538,6 +2833,7 @@ def cli_main(entry: str, argv: list[str] | None = None) -> int:
                     "role": packet["role"], "restricted_dependencies": packet["restricted_dependencies"],
                     "fingerprint_version": packet["fingerprint_version"], "required_refs": packet["required_refs"],
                     "semantic_verification": "not performed", "context_telemetry": "unknown"}
+                response["pause_checkpoint"] = packet["pause_checkpoint"]
                 response["next_actions"] = ["Read persisted context Markdown/JSON; page or narrow the task if the pack is too large"] + response["next_actions"]
         code = 7 if response["status"] == "blocked" else 0
     except HubError as exc:

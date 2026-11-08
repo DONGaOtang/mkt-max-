@@ -3,6 +3,8 @@
 /runtime-config.local.json
 /projects/
 /workspace/
+/work/
+/.codex/hooks.json
 /.venv/
 __pycache__/
 *.py[cod]

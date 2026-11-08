@@ -1,6 +1,6 @@
 # 本地运行协议（schema_version 1，fingerprint_version 2）
 
-运行库为 `scripts/hub_runtime.py`，Python 3.10+，仅标准库。`HubRuntime(workspace_root: Path | str)` 暴露 `init`、`resume`、`reopen`、`submit`、`rollback`、`repair`，异常为 `HubError`，含 `exit_code` 和 `response`。所有写入限制在配置工作根目录；指定外部原件仅作只读输入。目录名、ID、相对路径拒绝 `..`、Windows 保留名称、符号链接和 junction。
+运行库为 `scripts/hub_runtime.py`，Python 3.10+，仅标准库。`HubRuntime(workspace_root: Path | str)` 暴露 `init`、`resume`、`pause`、`reopen`、`submit`、`rollback`、`repair`，异常为 `HubError`，含 `exit_code` 和 `response`。所有写入限制在配置工作根目录；指定外部原件仅作只读输入。目录名、ID、相对路径拒绝 `..`、Windows 保留名称、符号链接和 junction。
 
 ## 公共调用与退出码
 
@@ -14,7 +14,9 @@ python scripts/start_agent.py resume --project ID_OR_PATH [--module ID] [--task 
 python scripts/start_agent.py reopen --project ID_OR_PATH --base REV --operation-id ID
     --file ACTUAL_RESTART_REQUEST --source-id SOURCE_ID --reason TEXT
     [--source-id ANOTHER_SOURCE_ID] [--retain-ref module:Opening] [--config FILE]
-python scripts/writeback.py source|contract|handoff|module|change|review|reopen
+python scripts/start_agent.py pause --project ID_OR_PATH --base REV --operation-id ID
+    --payload JSON_FILE [--config FILE]
+python scripts/writeback.py source|contract|handoff|module|change|review|reopen|pause
     --project ID_OR_PATH --base REV --operation-id ID --payload JSON_FILE [--config FILE]
 python scripts/rollback.py --project ID_OR_PATH --base REV --operation-id ID
     --to REV --reason TEXT [--config FILE]
@@ -38,6 +40,8 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 `applicability` 为 `now | later | not_needed | unknown`，四者独立于正文成熟度和用户决定。`content_status` 为 `outline | draft | reviewable | needs_review | blocked | archived`；`reviewable` 仅表示可评审，绝不等于批准。初始化不生成固定模块。
 
 ### 本轮委托、研究回交、接笔与章审
+
+每次节点停前先执行下节 `pause`，保存实际回交及五类索引。新登记为 `confirmed` 的人工决定在载荷顶层提供 `checkpoint_id`，引用同轮、同节点的已发布保存记录，展示材料的当前指纹须匹配。未来答复的 source 可以在保存之后登记。已有 rc.4 决定保留原历史，不追溯补造保存凭证；新确认必须走此路径。无 `gate` 的普通业务确认对应 `change` 保存。保存本身不取得人的同意。
 
 新建持久化项目使用 `workflow_mode=collaborative`、`workflow_version=2`，生成 `discussion_round`。所有确认的人审记录在 `new_value.round_id` 填当前轮次。轻量讨论先给对应的具体材料和问题；已明确的局部委托可以直接完成。需要保存时，委托原文可作初始化 Brief，分流简报或原型比较可作当前契约的 Markdown 正文。运行库的 `research`、`production` 描述工作阶段，实际人审范围由下表记录。
 
@@ -75,6 +79,36 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 **恢复讨论。** 用 `resume --required-ref decision:A --required-ref decision:B`（替换为真实 ID），补入研究、接笔或章审记录。回读 `current_decisions`、决定与来源原文、所示版本及正文，从原话说明本轮待办。`human_workflow_required:true` 表示旧模式须先重开；在 `task` 写“回到第一阶段”只改变任务说明。
 
 **旧案重开。** 先保存主创本次原话为 source，再调用 `reopen(project,base,operation_id,file,source_ids,reason,retained_refs=None)`，或上面的 CLI。输入含重开原话、来源、原因及用户明确保留的对象。操作生成新版本和新轮次，进入 `research`，旧契约、交接和人工授权保留历史并待核；明确保留的模块保留原文状态，其内容仍按本轮用途核对。回交继承范围后保存当前契约，登记本轮 A、研究取舍、B、交接及接笔。祖先快照、真实业务事实和外部事件继续可回查。重试同 operation-id 使用同一 base 和载荷，按原幂等规则返回已有结果。
+
+### pause：节点收尾
+
+API：`pause(project, base, operation_id, payload)`。`submit(..., kind="pause")`、`writeback.py pause`、`start_agent.py pause` 共用同一事务和自动接续核验。完整工作顺序见[节点停前保存](node-persistence.md)。
+
+必填 `file,node,materials,refs,pending_questions,next_action,authorized_scope`。`file` 是实际交给人看的正文。`node` 为 `brief | research | direction | writing | chapter_review | delivery | change | context_save`；常规人审节点的 `pending_questions` 至少一项具体待决问题。五个 `materials.category` 各出现一次：`original,research,creative,pending,next`。每项含 `title,status,refs,files`：`new` 须有实际文件或已登记引用；`referenced` 须引用已登记材料；`none` 无引用／文件并以非空 `note` 解释。额外文件只读输入，保存字节、SHA256 和原定位；typed refs 核存在与当前指纹。不得写假原稿填满类别。
+
+```json
+{
+  "file":"实际研究回交稿绝对路径",
+  "node":"research",
+  "refs":["contract:current","source:Research"],
+  "materials":[
+    {"category":"original","title":"主创亲笔","status":"referenced","refs":["source:Original"],"files":[]},
+    {"category":"research","title":"研究原件及发现","status":"new","refs":["source:Research"],"files":["实际发现稿绝对路径"]},
+    {"category":"creative","title":"创意取舍","status":"none","refs":[],"files":[],"note":"尚未选择方向"},
+    {"category":"pending","title":"待决问题","status":"new","refs":[],"files":["实际待决稿绝对路径"]},
+    {"category":"next","title":"下一步","status":"new","refs":[],"files":["实际接续说明绝对路径"]}
+  ],
+  "pending_questions":["继续查哪条线索，还是先由主创补写？"],
+  "next_action":"回读主创补稿，按其选择发展研究",
+  "authorized_scope":"仅第一阶段研究与局部试写"
+}
+```
+
+研究保存须覆盖待确认 `material_refs`；接笔保存覆盖 `handoff:current` 及所托模块；章审和整稿保存覆盖对应模块及实际展示版本。`pause` 默认主控可见，其整本私有索引不强行进入公开章节内容依赖；发给其他角色的任务包仍按登记权限过滤。
+
+结果增加 `committed,saved_revision,saved_checkpoint_id,saved_checkpoint_path,recovery_ready,recovery_context_path,recovery_context_json_path,captured_files`。`captured_files` 逐文件给实际捕获的 `original_path,sha256,size,category,artifact_id`，不能拿保存前或保存后另算的工作文件哈希冒充已保存字节。`committed:true` 表示不可变修订已发布；`recovery_ready:true` 表示自动生成的接续入口已回读核验。发布前失败，原 HEAD 有效；发布后仅派生失败，返回 `committed:true,recovery_ready:false` 和修复动作，不能重放事务。相同操作 ID 重试只恢复入口，不重复发布。
+
+中途／压缩前保存使用 `node:"context_save",reuse_materials:true`，提供真实 `file` 与 `authorized_scope`，沿用已保存分类索引、原顶层资料引用、实际展示正文、待决和下一步，并保留原人工 checkpoint 的有效性关系。不把该动作当人工决定。`packet.pause_checkpoint.pending_review` 定位原待审节点、授权范围、问题与下一步；原材料变化后仍保留问题，但 `current:false` 并要求先回交新版，不用中途保存重绑旧人工材料为有效。没有前次分类索引时明确无新增并保留已有登记对象，不能推测未落盘聊天。可选 `metadata` 保存宿主事件定位，`telemetry` 只收采集器已核实的观察，缺省 `unknown`；不会把载荷声明变成独立验证的实时遥测。
 
 ### source
 
@@ -138,7 +172,7 @@ ID：1—80个 ASCII 字母、数字、下划线或短横线，首位为字母�
 
 未指定模块的项目级接续将已登记初始化Brief、当前完整契约及交接作为必读上下文；这些入口不因目录翻页而丢失，仍服从角色限制。指定模块时，该模块的已登记依赖闭包、实际产物及显式 `required_refs` 是必要输入，受限即阻断；与它没有已登记依赖关系的Brief、完整契约和完整交接属于附带导航，只补充角色可见项。混合权限完整契约受限，不会仅因其中存在无关私有兄弟模块而阻断独立公开模块。若工作确实需要原始Brief或完整契约，须显式登记依赖或用 `required_refs` 指定，不能靠省略必要关系绕过约束。
 
-任务包JSON即版本绑定的接续检查点，返回 `checkpoint_path` 与 `context_json_path` 指向同一文件，记录已过滤的 `required_refs` 和 `fingerprint_version:2`。不覆盖项目中由作者或演示脚本维护的其他 `work/checkpoint.json`。角色受限时只保存可见的必读引用及受限数量，不回显受限模块ID；后续需由有权角色重新指定完整任务。
+任务包JSON即版本绑定的接续检查点，返回 `checkpoint_path` 与 `context_json_path` 指向同一文件，记录已过滤的 `required_refs` 和 `fingerprint_version:2`。节点保存的分类索引由 `packet.pause_checkpoint.index_path` 定位，原件按必读入口打开。任务包自身不采集实时用量；`context_telemetry` 默认未知，已存遥测从节点索引读取并重新核会话、时间和压缩代次，不能当此刻占用。不覆盖项目中由作者或演示脚本维护的其他 `work/checkpoint.json`。角色受限时只保存可见的必读引用及受限数量，不回显受限模块ID；后续需由有权角色重新指定完整任务。
 
 任务包可使用 `allowed_roles: [角色名]` 限定来源、契约、模块、变化对象、复核和接手产物。**原始来源和初始化Brief默认 `master` 范围**；未分类资料不会自动分发公开角色。来源要共享必须显式登记 `allowed_roles`；Brief要共享用API可选 `brief_allowed_roles=[...]` 或CLI `--brief-allowed-roles ...`。其余新对象未指定时保持开放并继承依赖限制，已有对象更新时省略此字段保留原限制，master可维护全量。早期schema-1原始资料未记录范围时也按master处理，不改不可变历史。
 

@@ -1,0 +1,32 @@
+{
+  "description": "OPTIONAL EXAMPLE ONLY. Replace every absolute path and run context_guard.py bind first. This file does not register hooks. Non-managed hooks require actual Codex review and trust. Current-chat hot reload has not been verified. Only declared existing files can be saved; unsaved model text cannot be recovered. See https://learn.chatgpt.com/docs/hooks .",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -X utf8 -B \"/ABSOLUTE/SKILL/scripts/context_guard.py\" --bindings \"/ABSOLUTE/WORKSPACE/context-bindings.json\" --hook",
+            "commandWindows": "python -X utf8 -B \"C:/REPLACE/SKILL/scripts/context_guard.py\" --bindings \"E:/REPLACE/WORKSPACE/context-bindings.json\" --hook",
+            "timeout": 30,
+            "statusMessage": "Saving the explicitly bound project before compaction"
+          }
+        ]
+      }
+    ],
+    "PostModelRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -X utf8 -B \"/ABSOLUTE/SKILL/scripts/context_guard.py\" --bindings \"/ABSOLUTE/WORKSPACE/context-bindings.json\" --hook",
+            "commandWindows": "python -X utf8 -B \"C:/REPLACE/SKILL/scripts/context_guard.py\" --bindings \"E:/REPLACE/WORKSPACE/context-bindings.json\" --hook",
+            "timeout": 30,
+            "statusMessage": "Checking the latest request snapshot for a bound project"
+          }
+        ]
+      }
+    ]
+  }
+}
